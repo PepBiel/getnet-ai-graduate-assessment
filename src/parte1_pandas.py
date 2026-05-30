@@ -33,7 +33,14 @@ def load_clean(path: str | Path) -> pd.DataFrame:
     """
     Carga el CSV y devuelve un DataFrame listo para análisis.
 
-    Documenta en `DECISIONS.md`
+    La limpieza convierte tipos y normaliza campos sin aplicar decisiones
+    predictivas globales. Conserva columnas `*_raw` para trazabilidad, no
+    elimina `cancellation_reason` ni `last_complaint_date`, no filtra
+    transacciones posteriores a `reference_date`, no elimina outliers y no usa
+    `fla_churn90` para decidir que filas conservar.
+
+    Las decisiones completas quedan documentadas en `DECISIONS.md` y los
+    supuestos en `ASSUMPTIONS.md`.
 
     Args:
         path: ruta al CSV.
@@ -41,8 +48,77 @@ def load_clean(path: str | Path) -> pd.DataFrame:
     Returns:
         DataFrame limpio.
     """
-    # TODO: implementa
-    raise NotImplementedError("Parte 1.1 · load_clean")
+    csv_path = Path(path)
+    df = pd.read_csv(csv_path, dtype="string")
+    df.columns = df.columns.str.strip()
+    audit: dict[str, Any] = {"n_rows_raw": int(len(df))}
+
+    required_columns = {
+        "transaction_id",
+        "merchant_id",
+        "transaction_date",
+        "amount",
+        "status",
+        "channel",
+        "reference_date",
+        "fla_churn90",
+    }
+    missing_columns = sorted(required_columns.difference(df.columns))
+    if missing_columns:
+        raise ValueError(f"Missing required columns: {missing_columns}")
+    for column in ["amount", "transaction_date", "reference_date", "last_complaint_date", "dat_process"]:
+        if column in df.columns:
+            df[f"{column}_raw"] = df[column]
+
+    amount_text = df["amount"].str.strip().replace({"": pd.NA})
+    amount_numeric_text = amount_text.str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
+    df["amount"] = pd.to_numeric(amount_numeric_text, errors="coerce")
+
+    amount_missing_raw = amount_text.isna()
+    df["amount"] = pd.to_numeric(amount_numeric_text, errors="coerce")
+    amount_parse_failure = amount_text.notna() & df["amount"].isna()
+
+    audit["amount_missing_raw"] = int(amount_missing_raw.sum())
+    audit["amount_parse_failures"] = int(amount_parse_failure.sum())
+
+    def _parse_mixed_date(series: pd.Series) -> pd.Series:
+        text = series.astype("string").str.strip().replace({"": pd.NA})
+        iso_mask = text.str.match(r"^\d{4}-\d{2}-\d{2}$", na=False)
+        dmy_mask = text.str.match(r"^\d{2}/\d{2}/\d{4}$", na=False)
+        parsed_iso = pd.to_datetime(text.where(iso_mask), format="%Y-%m-%d", errors="coerce")
+        parsed_dmy = pd.to_datetime(text.where(dmy_mask), format="%d/%m/%Y", errors="coerce")
+        parsed_fallback = pd.to_datetime(text.where(~(iso_mask | dmy_mask)), errors="coerce")
+        return parsed_iso.fillna(parsed_dmy).fillna(parsed_fallback)
+
+    for date_column in ["transaction_date", "reference_date", "last_complaint_date", "dat_process"]:
+        if date_column in df.columns:
+            raw_missing = int(df[f"{date_column}_raw"].isna().sum())
+            df[date_column] = _parse_mixed_date(df[date_column])
+            audit[f"{date_column}_parse_failures"] = int(df[date_column].isna().sum()) - raw_missing
+
+    for id_column in ["transaction_id", "merchant_id", "fla_churn90"]:
+        if id_column in df.columns:
+            df[id_column] = pd.to_numeric(df[id_column], errors="coerce").astype("Int64")
+
+    for category_column in ["status", "channel", "segment", "cancellation_reason"]:
+        if category_column in df.columns:
+            normalized = df[category_column].astype("string").str.strip()
+            if category_column in {"status", "channel"}:
+                normalized = normalized.str.lower()
+            df[category_column] = normalized.replace({"": pd.NA})
+
+    if "mcc" in df.columns:
+        df["mcc"] = df["mcc"].astype("string").str.strip().replace({"": pd.NA})
+
+    raw_columns = {column for column in df.columns if column.endswith("_raw")}
+    dedup_columns = [column for column in df.columns if column != "transaction_id" and column not in raw_columns]
+    duplicate_mask = df.duplicated(subset=dedup_columns, keep="first")
+    audit["business_duplicate_rows_removed"] = int(duplicate_mask.sum())
+    df = df.loc[~duplicate_mask].copy()
+
+    audit["n_rows_clean"] = int(len(df))
+    df.attrs["load_clean_audit"] = audit
+    return df
 
 
 # -----------------------------------------------------------------------------
