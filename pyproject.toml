@@ -47,22 +47,19 @@ dependencies = [
     "xgboost==2.1.1",
     "lightgbm==4.5.0",
     "shap==0.46.0",
-
     # Notebook (Parte 3)
     "jupyter==1.0.0",
     "ipykernel==6.29.5",
-
     # API stack (Parte 4) — uvicorn obligatorio
     "fastapi==0.115.0",
     "uvicorn[standard]==0.30.6",
     "pydantic==2.9.2",
-
     # Agentic framework (Parte 4) — OBLIGATORIO, no sustituir por LangChain/LlamaIndex
     "agno>=2.5,<3",
     "openai>=1.40,<2",
-
     # Utilidades comunes
     "python-dotenv==1.0.1",
+    "matplotlib>=3.10.9",
 ]
 
 [project.optional-dependencies]
