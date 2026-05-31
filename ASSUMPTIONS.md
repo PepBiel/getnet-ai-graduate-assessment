@@ -92,3 +92,17 @@ Documento vivo de supuestos. Se ira ampliando conforme avance la solucion.
 - **Qué supuse**: si un merchant no tiene transacciones seguras antes del snapshot, no lo trato como inactivo. Lo marco como falta de historial observable y no le asigno riesgo por inactividad.
 - **Cómo lo verificaría con stakeholder**: preguntaría si esos merchants son altas recientes, errores de extracción o casos esperados por el diseño del dataset.
 - **Impacto si mi supuesto es falso**: si realmente deberían considerarse inactivos, la heurística podría infraestimar su riesgo. Prefiero esta opción porque evita crear señales de churn a partir de ausencia de evidencia.
+
+## A14 - Supuestos de Parte 2 SQL
+
+- **Qué dice el spec ambiguamente**: el enunciado proporciona el esquema lógico de las tablas, pero no detalla constraints, duplicados reales, tipos exactos de fecha ni codificación de país.
+- **Qué supuse**: asumí que `merchants` tiene una fila por merchant, `transactions` una fila por transacción y `churn_labels` una fila por merchant y `reference_date`. También asumí que `country = 'BR'` identifica merchants brasileños.
+- **Cómo lo verificaría con stakeholder**: revisaría constraints, conteos de duplicados por clave, tipos reales de `transaction_date` y `dat_process`, y valores posibles de `country`.
+- **Impacto si mi supuesto es falso**: joins o agregaciones podrían duplicar métricas como TPV o churn rate, y los filtros de país o fechas podrían incluir o excluir filas no esperadas.
+
+## A15 - Periodos temporales en SQL
+
+- **Qué dice el spec ambiguamente**: se piden periodos como Q3 2025 y comparativas mensuales YoY, pero no se especifica si `transaction_date` es `DATE` o `TIMESTAMP`.
+- **Qué supuse**: usé intervalos semiabiertos, por ejemplo `[2025-07-01, 2025-10-01)` para Q3 2025, y truncado mensual de `transaction_date` para la comparación 2025 vs 2024.
+- **Cómo lo verificaría con stakeholder**: confirmaría la convención temporal usada en reporting oficial y si los timestamps se almacenan con zona horaria.
+- **Impacto si mi supuesto es falso**: algunas transacciones cercanas a límites de mes o trimestre podrían asignarse a un periodo distinto.
