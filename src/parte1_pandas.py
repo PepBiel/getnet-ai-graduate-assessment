@@ -221,8 +221,439 @@ def quality_report(df: pd.DataFrame) -> dict[str, Any]:
           }
         }
     """
-    # TODO: implementa
-    raise NotImplementedError("Parte 1.3 · quality_report")
+    issues: list[dict[str, Any]] = []
+    audit = df.attrs.get("load_clean_audit", {}) or {}
+
+    def add_issue(
+        column: str,
+        rows_affected: int,
+        impact: str,
+        fix: str,
+    ) -> None:
+        """Añade un problema solo si afecta al menos a una fila."""
+        rows_affected = int(rows_affected)
+        if rows_affected <= 0:
+            return
+
+        issues.append(
+            {
+                "column": column,
+                "rows_affected": rows_affected,
+                "impact": impact,
+                "fix": fix,
+            }
+        )
+
+    n_rows = int(len(df))
+    n_cols = int(df.shape[1])
+
+    # ------------------------------------------------------------------
+    # Calidad de amount
+    # ------------------------------------------------------------------
+    if "amount" in df.columns:
+        amount_missing = int(df["amount"].isna().sum())
+
+        add_issue(
+            column="amount",
+            rows_affected=amount_missing,
+            impact=(
+                "Los importes ausentes no pueden contribuir al TPV y pueden "
+                "infraestimar el volumen del merchant, especialmente si la "
+                "transacción está aprobada."
+            ),
+            fix=(
+                "No imputar importes de forma silenciosa. Mantenerlos como "
+                "missing para el cálculo de KPIs, reportar el problema y "
+                "validar con el origen de datos por qué faltan importes."
+            ),
+        )
+
+    if {"amount", "status"}.issubset(df.columns):
+        approved_amount_missing = int(
+            (df["amount"].isna() & df["status"].eq("approved")).sum()
+        )
+
+        add_issue(
+            column="amount",
+            rows_affected=approved_amount_missing,
+            impact=(
+                "Existen transacciones aprobadas con amount ausente. Esto es "
+                "especialmente relevante porque esas operaciones deberían "
+                "contribuir al TPV, pero no pueden hacerlo al no tener importe "
+                "informado."
+            ),
+            fix=(
+                "No imputar importes sin una regla de negocio. Reportar estos "
+                "casos y revisar el origen de datos para entender por qué hay "
+                "operaciones aprobadas sin importe."
+            ),
+        )
+
+    if "amount_raw" in df.columns and "amount" in df.columns:
+        amount_raw_text = df["amount_raw"].astype("string").str.strip()
+        amount_raw_text = amount_raw_text.replace({"": pd.NA})
+        amount_parse_failures = int(
+            (amount_raw_text.notna() & df["amount"].isna()).sum()
+        )
+    else:
+        amount_parse_failures = int(audit.get("amount_parse_failures", 0))
+
+    add_issue(
+        column="amount",
+        rows_affected=amount_parse_failures,
+        impact=(
+            "Existen valores no vacíos de amount que no se pudieron convertir "
+            "a numérico. Esto afecta directamente al TPV y a cualquier feature "
+            "basada en importes."
+        ),
+        fix=(
+            "Parsear amount de forma explícita usando el formato BR/ES "
+            "observado y revisar cualquier valor que siga sin poder convertirse."
+        ),
+    )
+
+    if "amount" in df.columns:
+        amount_non_null = df["amount"].dropna()
+
+        if not amount_non_null.empty:
+            q1 = amount_non_null.quantile(0.25)
+            q3 = amount_non_null.quantile(0.75)
+            iqr = q3 - q1
+            upper_bound = q3 + 1.5 * iqr
+
+            high_amount_rows = int((df["amount"] > upper_bound).sum())
+
+            add_issue(
+                column="amount",
+                rows_affected=high_amount_rows,
+                impact=(
+                    "La distribución de amount es muy asimétrica y existen "
+                    "importes altos respecto al rango intercuartílico. No los "
+                    "trato automáticamente como errores, pero pueden afectar "
+                    "agregaciones y modelos sensibles a valores extremos."
+                ),
+                fix=(
+                    "No eliminar automáticamente. Revisar reglas de negocio "
+                    "por segmento/MCC y considerar transformaciones robustas "
+                    "como percentiles, winsorization o log1p en modelado."
+                ),
+            )
+
+    # ------------------------------------------------------------------
+    # Fechas mixtas y fallos de parseo
+    # ------------------------------------------------------------------
+    if "transaction_date_raw" in df.columns:
+        tx_raw = df["transaction_date_raw"].astype("string").str.strip()
+        iso_mask = tx_raw.str.match(r"^\d{4}-\d{2}-\d{2}$", na=False)
+        dmy_mask = tx_raw.str.match(r"^\d{2}/\d{2}/\d{4}$", na=False)
+        other_mask = tx_raw.notna() & ~(iso_mask | dmy_mask)
+
+        n_formats = int(iso_mask.any()) + int(dmy_mask.any()) + int(other_mask.any())
+        mixed_format_rows = int(dmy_mask.sum() + other_mask.sum())
+
+        if n_formats > 1:
+            add_issue(
+                column="transaction_date",
+                rows_affected=mixed_format_rows,
+                impact=(
+                    "transaction_date aparece en más de un formato raw. Asumir "
+                    "un único formato podría provocar pérdida de filas o fechas "
+                    "mal parseadas."
+                ),
+                fix=(
+                    "Usar un parseo explícito multi-formato y registrar los "
+                    "fallos de parseo, como se hace en load_clean."
+                ),
+            )
+
+    for date_column in [
+        "transaction_date",
+        "reference_date",
+        "last_complaint_date",
+        "dat_process",
+    ]:
+        raw_column = f"{date_column}_raw"
+
+        if raw_column in df.columns and date_column in df.columns:
+            raw_text = df[raw_column].astype("string").str.strip()
+            raw_text = raw_text.replace({"": pd.NA})
+            parse_failures = int((raw_text.notna() & df[date_column].isna()).sum())
+        else:
+            parse_failures = int(audit.get(f"{date_column}_parse_failures", 0))
+
+        add_issue(
+            column=date_column,
+            rows_affected=parse_failures,
+            impact=(
+                f"Hay valores no vacíos en {date_column} que no se pudieron "
+                "parsear como fecha. Esto puede afectar agregaciones mensuales, "
+                "validaciones temporales o construcción de features respecto "
+                "al snapshot."
+            ),
+            fix=(
+                "Mantener esos valores como missing, reportarlos y validar con "
+                "el data owner cuáles son los formatos de fecha aceptados."
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # Duplicados de negocio detectados por load_clean
+    # ------------------------------------------------------------------
+    duplicate_rows_removed = int(audit.get("business_duplicate_rows_removed", 0))
+
+    if duplicate_rows_removed == 0 and "transaction_id" in df.columns:
+        raw_columns = {column for column in df.columns if column.endswith("_raw")}
+        dedup_columns = [
+            column
+            for column in df.columns
+            if column != "transaction_id" and column not in raw_columns
+        ]
+
+        if dedup_columns:
+            duplicate_rows_removed = int(
+                df.duplicated(subset=dedup_columns, keep="first").sum()
+            )
+
+    add_issue(
+        column="transaction_id",
+        rows_affected=duplicate_rows_removed,
+        impact=(
+            "Los duplicados de negocio pueden inflar TPV, número de "
+            "transacciones y métricas de actividad aunque transaction_id sea "
+            "único."
+        ),
+        fix=(
+            "Deduplicar usando columnas de negocio normalizadas, no solo "
+            "transaction_id, y conservar el número de filas eliminadas en la "
+            "auditoría de load_clean."
+        ),
+    )
+
+    # ------------------------------------------------------------------
+    # Coherencia temporal respecto a reference_date
+    # ------------------------------------------------------------------
+    if {"transaction_date", "reference_date"}.issubset(df.columns):
+        future_tx_mask = (
+            df["transaction_date"].notna()
+            & df["reference_date"].notna()
+            & (df["transaction_date"] > df["reference_date"])
+        )
+
+        add_issue(
+            column="transaction_date",
+            rows_affected=int(future_tx_mask.sum()),
+            impact=(
+                "Existen transacciones posteriores a reference_date, que se "
+                "interpreta como snapshot del análisis. Pueden ser válidas para "
+                "análisis descriptivo, pero no deberían usarse como información "
+                "disponible en el snapshot para predecir churn."
+            ),
+            fix=(
+                "No eliminarlas globalmente en load_clean. Aplicar de forma "
+                "explícita el filtro transaction_date <= reference_date al "
+                "construir features predictivas."
+            ),
+        )
+
+    if {"last_complaint_date", "reference_date"}.issubset(df.columns):
+        future_complaint_mask = (
+            df["last_complaint_date"].notna()
+            & df["reference_date"].notna()
+            & (df["last_complaint_date"] > df["reference_date"])
+        )
+
+        add_issue(
+            column="last_complaint_date",
+            rows_affected=int(future_complaint_mask.sum()),
+            impact=(
+                "Algunas fechas de reclamo son posteriores al snapshot. Usar "
+                "last_complaint_date directamente como feature introduciría "
+                "leakage temporal en un modelo de churn."
+            ),
+            fix=(
+                "Usar solo reclamos ocurridos en o antes de reference_date, o "
+                "derivar una variable segura como days_since_last_complaint_safe."
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # cancellation_reason como posible leakage post-evento
+    # ------------------------------------------------------------------
+    if {"cancellation_reason", "fla_churn90"}.issubset(df.columns):
+        has_cancellation_reason = (
+            df["cancellation_reason"].notna()
+            & (df["cancellation_reason"].astype("string").str.strip() != "")
+        )
+
+        positives_with_reason = int(
+            (has_cancellation_reason & df["fla_churn90"].eq(1)).sum()
+        )
+        negatives_with_reason = int(
+            (has_cancellation_reason & df["fla_churn90"].eq(0)).sum()
+        )
+
+        if positives_with_reason > 0 and negatives_with_reason == 0:
+            add_issue(
+                column="cancellation_reason",
+                rows_affected=positives_with_reason,
+                impact=(
+                    "cancellation_reason aparece únicamente en casos positivos "
+                    "de churn. Aunque sería muy predictiva, probablemente "
+                    "representa información posterior al evento y generaría "
+                    "target leakage."
+                ),
+                fix=(
+                    "Conservar la columna para auditoría y análisis descriptivo, "
+                    "pero excluirla de features predictivas salvo que se confirme "
+                    "que estaba disponible en el momento de predicción."
+                ),
+            )
+
+    if {"cancellation_reason", "status"}.issubset(df.columns):
+        has_cancellation_reason = (
+            df["cancellation_reason"].notna()
+            & (df["cancellation_reason"].astype("string").str.strip() != "")
+        )
+
+        approved_with_cancellation_reason = int(
+            (has_cancellation_reason & df["status"].eq("approved")).sum()
+        )
+
+        add_issue(
+            column="cancellation_reason",
+            rows_affected=approved_with_cancellation_reason,
+            impact=(
+                "cancellation_reason aparece también en transacciones aprobadas. "
+                "Esto sugiere que no representa el estado operativo de una "
+                "transacción individual, sino información asociada al merchant "
+                "o a un evento de cancelación/churn."
+            ),
+            fix=(
+                "No usar cancellation_reason como señal transaccional. "
+                "Mantenerla solo para auditoría o análisis descriptivo y "
+                "excluirla de features predictivas salvo confirmación de "
+                "disponibilidad temporal."
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # Dominios categóricos
+    # ------------------------------------------------------------------
+    if "status" in df.columns:
+        expected_status = {"approved", "denied", "reversed"}
+        unexpected_status = df["status"].notna() & ~df["status"].isin(expected_status)
+
+        add_issue(
+            column="status",
+            rows_affected=int(unexpected_status.sum()),
+            impact=(
+                "Valores inesperados en status pueden romper definiciones de "
+                "KPIs como TPV y approval_rate."
+            ),
+            fix=(
+                "Normalizar status y confirmar con negocio o data owner el "
+                "dominio válido de estados transaccionales."
+            ),
+        )
+
+    if "channel" in df.columns:
+        expected_channels = {"pos", "ecom", "pix", "tef"}
+        unexpected_channels = df["channel"].notna() & ~df["channel"].isin(
+            expected_channels
+        )
+
+        add_issue(
+            column="channel",
+            rows_affected=int(unexpected_channels.sum()),
+            impact=(
+                "Valores inesperados en channel pueden distorsionar métricas de "
+                "mix de canal como pct_ecom."
+            ),
+            fix=(
+                "Normalizar channel y confirmar con negocio o data owner el "
+                "dominio válido de canales."
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # Desbalanceo del target
+    # ------------------------------------------------------------------
+    if "fla_churn90" in df.columns:
+        target = df["fla_churn90"].dropna()
+
+        if not target.empty:
+            positive_rate = float(target.eq(1).mean())
+            minority_rate = min(positive_rate, 1.0 - positive_rate)
+
+            if minority_rate < 0.20:
+                add_issue(
+                    column="fla_churn90",
+                    rows_affected=int(target.shape[0]),
+                    impact=(
+                        "El target de churn está desbalanceado. Accuracy puede "
+                        "ser una métrica engañosa, porque un modelo podría "
+                        "obtener buen resultado prediciendo mayoritariamente la "
+                        "clase dominante."
+                    ),
+                    fix=(
+                        "Usar métricas adecuadas para clasificación "
+                        "desbalanceada, como ROC-AUC, PR-AUC / Average "
+                        "Precision, recall@k y calibración."
+                    ),
+                )
+
+    # ------------------------------------------------------------------
+    # Summary enriquecido
+    # ------------------------------------------------------------------
+    summary: dict[str, Any] = {
+        "n_rows": n_rows,
+        "n_cols": n_cols,
+        "n_issues": int(len(issues)),
+        "n_rows_raw": audit.get("n_rows_raw"),
+        "n_rows_clean": audit.get("n_rows_clean"),
+    }
+
+    if "merchant_id" in df.columns:
+        summary["n_merchants"] = int(df["merchant_id"].nunique(dropna=True))
+
+    if "fla_churn90" in df.columns:
+        target = df["fla_churn90"].dropna()
+
+        if not target.empty:
+            summary["target_positive_rate_rows"] = float(target.eq(1).mean())
+
+        if {"merchant_id", "fla_churn90"}.issubset(df.columns):
+            merchant_target = (
+                df.dropna(subset=["merchant_id"])
+                .groupby("merchant_id")["fla_churn90"]
+                .first()
+            )
+
+            if not merchant_target.empty:
+                summary["target_positive_rate_merchants"] = float(
+                    merchant_target.eq(1).mean()
+                )
+
+                target_consistency = (
+                    df.dropna(subset=["merchant_id"])
+                    .groupby("merchant_id")["fla_churn90"]
+                    .nunique()
+                )
+                summary["n_merchants_with_inconsistent_target"] = int(
+                    (target_consistency > 1).sum()
+                )
+
+    if "amount" in df.columns:
+        amount_non_null = df["amount"].dropna()
+
+        if not amount_non_null.empty:
+            summary["amount_p99"] = float(amount_non_null.quantile(0.99))
+            summary["amount_max"] = float(amount_non_null.max())
+
+    return {
+        "issues": issues,
+        "summary": summary,
+    }
 
 
 # -----------------------------------------------------------------------------

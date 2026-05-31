@@ -39,3 +39,12 @@ Documento vivo de decisiones tecnicas. Cada seccion se ira ampliando conforme av
 - **Por que**: TPV representa volumen de pagos procesado con exito, por lo que las transacciones denegadas o reversadas no contribuyen al volumen. En cambio, `n_tx` incluye todos los estados porque mide actividad e intentos, no solo pagos exitosos.
 - **Que descarte**: contar `pct_ecom` por numero de transacciones, incluir denegadas/reversadas en TPV, filtrar por `reference_date` dentro de una funcion general de agregacion o eliminar outliers durante el calculo mensual.
 - **Trade-off**: los importes faltantes en transacciones aprobadas no se imputan, asi que el TPV puede quedar subestimado en merchant-meses afectados. Prefiero dejar visible el problema para `quality_report` antes que inventar volumen.
+
+### D6 - Reporte de calidad de datos
+
+- **Qué hice**: implementé `quality_report` como un reporte estructurado con problemas detectados, filas afectadas, impacto y propuesta de corrección.
+- **Por qué**: el objetivo no es solo limpiar datos, sino dejar evidencia de los riesgos encontrados para que otra persona pueda mantener o auditar el pipeline.
+- **Qué incluí**: importes missing, importes missing en transacciones aprobadas, fallos de parseo, formatos mixtos, importes extremos para revisión, duplicados de negocio, inconsistencias temporales respecto a `reference_date`, riesgo de leakage en `cancellation_reason`, presencia de `cancellation_reason` en transacciones aprobadas, target desbalanceado y valores categóricos inesperados.
+- **Qué descarté**: no traté todos los problemas como errores a eliminar. Algunos, como outliers o transacciones posteriores a `reference_date`, se reportan para que el tratamiento dependa del uso posterior.
+- **Trade-off**: el reporte es conservador y puede marcar situaciones que son válidas para análisis descriptivo, pero no seguras para modelado predictivo. Prefiero explicitar estos riesgos antes que ocultarlos durante la limpieza.
+- **Summary adicional**: añadí métricas de contexto como número de merchants, tasa positiva del target a nivel fila y merchant, consistencia del target por merchant y percentiles/resumen de importes para facilitar la revisión posterior.

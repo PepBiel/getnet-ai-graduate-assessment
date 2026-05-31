@@ -1,0 +1,77 @@
+{
+  "issues": [
+    {
+      "column": "amount",
+      "rows_affected": 5812,
+      "impact": "Los importes ausentes no pueden contribuir al TPV y pueden infraestimar el volumen del merchant, especialmente si la transacci\u00f3n est\u00e1 aprobada.",
+      "fix": "No imputar importes de forma silenciosa. Mantenerlos como missing para el c\u00e1lculo de KPIs, reportar el problema y validar con el origen de datos por qu\u00e9 faltan importes."
+    },
+    {
+      "column": "amount",
+      "rows_affected": 5095,
+      "impact": "Existen transacciones aprobadas con amount ausente. Esto es especialmente relevante porque esas operaciones deber\u00edan contribuir al TPV, pero no pueden hacerlo al no tener importe informado.",
+      "fix": "No imputar importes sin una regla de negocio. Reportar estos casos y revisar el origen de datos para entender por qu\u00e9 hay operaciones aprobadas sin importe."
+    },
+    {
+      "column": "amount",
+      "rows_affected": 21520,
+      "impact": "La distribuci\u00f3n de amount es muy asim\u00e9trica y existen importes altos respecto al rango intercuart\u00edlico. No los trato autom\u00e1ticamente como errores, pero pueden afectar agregaciones y modelos sensibles a valores extremos.",
+      "fix": "No eliminar autom\u00e1ticamente. Revisar reglas de negocio por segmento/MCC y considerar transformaciones robustas como percentiles, winsorization o log1p en modelado."
+    },
+    {
+      "column": "transaction_date",
+      "rows_affected": 19960,
+      "impact": "transaction_date aparece en m\u00e1s de un formato raw. Asumir un \u00fanico formato podr\u00eda provocar p\u00e9rdida de filas o fechas mal parseadas.",
+      "fix": "Usar un parseo expl\u00edcito multi-formato y registrar los fallos de parseo, como se hace en load_clean."
+    },
+    {
+      "column": "transaction_id",
+      "rows_affected": 4180,
+      "impact": "Los duplicados de negocio pueden inflar TPV, n\u00famero de transacciones y m\u00e9tricas de actividad aunque transaction_id sea \u00fanico.",
+      "fix": "Deduplicar usando columnas de negocio normalizadas, no solo transaction_id, y conservar el n\u00famero de filas eliminadas en la auditor\u00eda de load_clean."
+    },
+    {
+      "column": "transaction_date",
+      "rows_affected": 25095,
+      "impact": "Existen transacciones posteriores a reference_date, que se interpreta como snapshot del an\u00e1lisis. Pueden ser v\u00e1lidas para an\u00e1lisis descriptivo, pero no deber\u00edan usarse como informaci\u00f3n disponible en el snapshot para predecir churn.",
+      "fix": "No eliminarlas globalmente en load_clean. Aplicar de forma expl\u00edcita el filtro transaction_date <= reference_date al construir features predictivas."
+    },
+    {
+      "column": "last_complaint_date",
+      "rows_affected": 3454,
+      "impact": "Algunas fechas de reclamo son posteriores al snapshot. Usar last_complaint_date directamente como feature introducir\u00eda leakage temporal en un modelo de churn.",
+      "fix": "Usar solo reclamos ocurridos en o antes de reference_date, o derivar una variable segura como days_since_last_complaint_safe."
+    },
+    {
+      "column": "cancellation_reason",
+      "rows_affected": 12956,
+      "impact": "cancellation_reason aparece \u00fanicamente en casos positivos de churn. Aunque ser\u00eda muy predictiva, probablemente representa informaci\u00f3n posterior al evento y generar\u00eda target leakage.",
+      "fix": "Conservar la columna para auditor\u00eda y an\u00e1lisis descriptivo, pero excluirla de features predictivas salvo que se confirme que estaba disponible en el momento de predicci\u00f3n."
+    },
+    {
+      "column": "cancellation_reason",
+      "rows_affected": 11373,
+      "impact": "cancellation_reason aparece tambi\u00e9n en transacciones aprobadas. Esto sugiere que no representa el estado operativo de una transacci\u00f3n individual, sino informaci\u00f3n asociada al merchant o a un evento de cancelaci\u00f3n/churn.",
+      "fix": "No usar cancellation_reason como se\u00f1al transaccional. Mantenerla solo para auditor\u00eda o an\u00e1lisis descriptivo y excluirla de features predictivas salvo confirmaci\u00f3n de disponibilidad temporal."
+    },
+    {
+      "column": "fla_churn90",
+      "rows_affected": 199820,
+      "impact": "El target de churn est\u00e1 desbalanceado. Accuracy puede ser una m\u00e9trica enga\u00f1osa, porque un modelo podr\u00eda obtener buen resultado prediciendo mayoritariamente la clase dominante.",
+      "fix": "Usar m\u00e9tricas adecuadas para clasificaci\u00f3n desbalanceada, como ROC-AUC, PR-AUC / Average Precision, recall@k y calibraci\u00f3n."
+    }
+  ],
+  "summary": {
+    "n_rows": 199820,
+    "n_cols": 18,
+    "n_issues": 10,
+    "n_rows_raw": 204000,
+    "n_rows_clean": 199820,
+    "n_merchants": 9982,
+    "target_positive_rate_rows": 0.07043839455509959,
+    "target_positive_rate_merchants": 0.08745742336205169,
+    "n_merchants_with_inconsistent_target": 0,
+    "amount_p99": 2459.1679,
+    "amount_max": 67380.7
+  }
+}

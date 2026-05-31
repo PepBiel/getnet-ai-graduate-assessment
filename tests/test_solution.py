@@ -223,6 +223,205 @@ def test_monthly_kpis_raises_on_missing_required_columns() -> None:
         monthly_kpis(df)
 
 
+def test_quality_report_returns_expected_structure() -> None:
+    from src.parte1_pandas import quality_report
+
+    df = pd.DataFrame(
+        {
+            "transaction_id": [1, 2, 3],
+            "merchant_id": [10, 10, 20],
+            "transaction_date": pd.to_datetime(
+                ["2025-09-01", "2025-10-01", "2025-09-15"]
+            ),
+            "reference_date": pd.to_datetime(
+                ["2025-09-30", "2025-09-30", "2025-09-30"]
+            ),
+            "amount": [100.0, None, 50.0],
+            "status": ["approved", "denied", "reversed"],
+            "channel": ["ecom", "pos", "pix"],
+            "fla_churn90": [0, 0, 1],
+            "last_complaint_date": pd.to_datetime([None, "2025-10-05", "2025-09-10"]),
+            "cancellation_reason": [pd.NA, pd.NA, "price"],
+        }
+    )
+
+    report = quality_report(df)
+
+    assert set(report.keys()) == {"issues", "summary"}
+    assert isinstance(report["issues"], list)
+    assert isinstance(report["summary"], dict)
+    assert report["summary"]["n_rows"] == 3
+    assert report["summary"]["n_cols"] == len(df.columns)
+    assert report["summary"]["n_issues"] == len(report["issues"])
+
+    for issue in report["issues"]:
+        assert set(issue.keys()) == {"column", "rows_affected", "impact", "fix"}
+        assert isinstance(issue["rows_affected"], int)
+        assert issue["rows_affected"] > 0
+        assert issue["impact"]
+        assert issue["fix"]
+
+
+def test_quality_report_detects_key_issues() -> None:
+    from src.parte1_pandas import quality_report
+
+    df = pd.DataFrame(
+        {
+            "transaction_id": [1, 2, 3, 4, 5, 6],
+            "merchant_id": [10, 10, 20, 20, 30, 30],
+            "transaction_date": pd.to_datetime(
+                [
+                    "2025-09-01",
+                    "2025-10-01",
+                    "2025-09-15",
+                    "2025-09-20",
+                    "2025-09-21",
+                    "2025-09-22",
+                ]
+            ),
+            "reference_date": pd.to_datetime(
+                [
+                    "2025-09-30",
+                    "2025-09-30",
+                    "2025-09-30",
+                    "2025-09-30",
+                    "2025-09-30",
+                    "2025-09-30",
+                ]
+            ),
+            "amount": [100.0, None, 50.0, 75.0, 25.0, 30.0],
+            "status": ["approved", "denied", "approved", "approved", "approved", "denied"],
+            "channel": ["ecom", "pos", "pix", "tef", "pos", "ecom"],
+            "fla_churn90": [0, 0, 1, 0, 0, 0],
+            "last_complaint_date": pd.to_datetime(
+                [None, "2025-10-05", "2025-09-10", None, None, None]
+            ),
+            "cancellation_reason": [pd.NA, pd.NA, "price", pd.NA, pd.NA, pd.NA],
+        }
+    )
+
+    report = quality_report(df)
+    issue_columns = {issue["column"] for issue in report["issues"]}
+
+    assert "amount" in issue_columns
+    assert "transaction_date" in issue_columns
+    assert "last_complaint_date" in issue_columns
+    assert "cancellation_reason" in issue_columns
+    assert "fla_churn90" in issue_columns
+
+
+def test_quality_report_does_not_modify_dataframe() -> None:
+    from src.parte1_pandas import quality_report
+
+    df = pd.DataFrame(
+        {
+            "transaction_id": [1],
+            "merchant_id": [10],
+            "transaction_date": pd.to_datetime(["2025-10-01"]),
+            "reference_date": pd.to_datetime(["2025-09-30"]),
+            "amount": [None],
+            "status": ["approved"],
+            "channel": ["ecom"],
+            "fla_churn90": [1],
+            "last_complaint_date": pd.to_datetime(["2025-10-05"]),
+            "cancellation_reason": ["price"],
+        }
+    )
+    before = df.copy(deep=True)
+
+    quality_report(df)
+
+    pd.testing.assert_frame_equal(df, before)
+
+
+def test_quality_report_detects_enriched_amount_and_cancellation_issues() -> None:
+    from src.parte1_pandas import quality_report
+
+    df = pd.DataFrame(
+        {
+            "transaction_id": [1, 2, 3, 4, 5, 6],
+            "merchant_id": [10, 10, 20, 20, 30, 30],
+            "transaction_date": pd.to_datetime(
+                [
+                    "2025-09-01",
+                    "2025-09-02",
+                    "2025-09-03",
+                    "2025-09-04",
+                    "2025-09-05",
+                    "2025-09-06",
+                ]
+            ),
+            "reference_date": pd.to_datetime(
+                [
+                    "2025-09-30",
+                    "2025-09-30",
+                    "2025-09-30",
+                    "2025-09-30",
+                    "2025-09-30",
+                    "2025-09-30",
+                ]
+            ),
+            "amount": [10.0, None, 10.0, 10.0, 10.0, 1000.0],
+            "status": ["approved", "approved", "approved", "denied", "approved", "approved"],
+            "channel": ["pos", "pos", "ecom", "pix", "tef", "ecom"],
+            "fla_churn90": [0, 0, 1, 1, 0, 0],
+            "last_complaint_date": pd.to_datetime([None, None, None, None, None, None]),
+            "cancellation_reason": [pd.NA, pd.NA, "price", pd.NA, pd.NA, pd.NA],
+        }
+    )
+
+    report = quality_report(df)
+
+    amount_issues = [issue for issue in report["issues"] if issue["column"] == "amount"]
+    cancellation_issues = [
+        issue for issue in report["issues"] if issue["column"] == "cancellation_reason"
+    ]
+
+    assert any(
+        issue["rows_affected"] == 1 and "transacciones aprobadas" in issue["impact"]
+        for issue in amount_issues
+    )
+    assert any(
+        issue["rows_affected"] == 1 and "asimétrica" in issue["impact"]
+        for issue in amount_issues
+    )
+    assert any("únicamente en casos positivos" in issue["impact"] for issue in cancellation_issues)
+    assert any("transacciones aprobadas" in issue["impact"] for issue in cancellation_issues)
+
+
+def test_quality_report_summary_includes_context_metrics() -> None:
+    from src.parte1_pandas import quality_report
+
+    df = pd.DataFrame(
+        {
+            "transaction_id": [1, 2, 3, 4, 5],
+            "merchant_id": [10, 10, 20, 20, 30],
+            "transaction_date": pd.to_datetime(
+                ["2025-09-01", "2025-09-02", "2025-09-03", "2025-09-04", "2025-09-05"]
+            ),
+            "reference_date": pd.to_datetime(
+                ["2025-09-30", "2025-09-30", "2025-09-30", "2025-09-30", "2025-09-30"]
+            ),
+            "amount": [10.0, 20.0, 30.0, 40.0, 50.0],
+            "status": ["approved", "denied", "approved", "denied", "approved"],
+            "channel": ["pos", "ecom", "pix", "tef", "pos"],
+            "fla_churn90": [0, 1, 0, 0, 1],
+            "last_complaint_date": pd.to_datetime([None, None, None, None, None]),
+            "cancellation_reason": [pd.NA, pd.NA, pd.NA, pd.NA, pd.NA],
+        }
+    )
+
+    report = quality_report(df)
+    summary = report["summary"]
+
+    assert summary["n_merchants"] == 3
+    assert summary["target_positive_rate_rows"] == pytest.approx(2 / 5)
+    assert summary["target_positive_rate_merchants"] == pytest.approx(1 / 3)
+    assert summary["n_merchants_with_inconsistent_target"] == 1
+    assert summary["amount_p99"] == pytest.approx(49.6)
+    assert summary["amount_max"] == 50.0
+
+
 # TODO: añade tus tests reales. Ejemplos:
 #
 # def test_monthly_kpis_returns_one_row_per_merchant_month(tiny_df):

@@ -43,3 +43,24 @@ Documento vivo de supuestos. Se ira ampliando conforme avance la solucion.
 - **Que supuse**: el mes del KPI se deriva de `transaction_date`; `dat_process` es una fecha operativa de procesamiento.
 - **Como lo verificaria con stakeholder**: validaria con el equipo de negocio que los KPIs mensuales se reportan por fecha de transaccion y no por fecha de ingesta/procesamiento.
 - **Impacto si mi supuesto es falso**: algunos pagos cerca de cierre de mes podrian asignarse a un mes distinto en dashboards operativos.
+
+## A7 - `quality_report` como auditoria, no limpieza adicional
+
+- **Que dice el spec ambiguamente**: pide un reporte de calidad, pero no define si los problemas deben corregirse automaticamente.
+- **Que supuse**: `quality_report` debe detectar y comunicar problemas, no modificar el DataFrame.
+- **Como lo verificaria con stakeholder**: preguntaria que problemas deben bloquear el pipeline y cuales deben quedar como warning.
+- **Impacto si mi supuesto es falso**: algunos problemas se reportaran pero no se corregiran automaticamente. Esto es intencional para evitar sobrelimpieza sin reglas de negocio.
+
+## A8 - Outliers como warning, no error automático
+
+- **Qué dice el spec ambiguamente**: el enunciado no define qué importe debe considerarse imposible ni qué tratamiento aplicar a valores extremos.
+- **Qué supuse**: los importes extremos deben reportarse como casos a revisar, pero no eliminarse automáticamente.
+- **Cómo lo verificaría con stakeholder**: validaría límites esperados por país, MCC, segmento y tipo de merchant.
+- **Impacto si mi supuesto es falso**: si algunos importes extremos son errores reales, podrían afectar TPV y modelos. Aun así, prefiero no eliminarlos sin regla de negocio explícita.
+
+## A9 - `cancellation_reason` no es señal transaccional
+
+- **Qué dice el spec ambiguamente**: no queda claro si `cancellation_reason` describe una transacción concreta, un merchant o un evento posterior de churn.
+- **Qué supuse**: dado que aparece también en transacciones aprobadas y está fuertemente asociada a `fla_churn90`, la trato como información sensible a leakage y no como señal operativa de una transacción.
+- **Cómo lo verificaría con stakeholder**: confirmaría cuándo se registra `cancellation_reason` y si estaba disponible antes del snapshot de análisis.
+- **Impacto si mi supuesto es falso**: si la columna sí estuviera disponible antes del snapshot, podríamos estar descartando una señal útil. Sin esa confirmación, la opción segura es excluirla de features predictivas.
