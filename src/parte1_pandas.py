@@ -71,8 +71,11 @@ def load_clean(path: str | Path) -> pd.DataFrame:
             df[f"{column}_raw"] = df[column]
 
     amount_text = df["amount"].str.strip().replace({"": pd.NA})
-    amount_numeric_text = amount_text.str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
-    df["amount"] = pd.to_numeric(amount_numeric_text, errors="coerce")
+    amount_numeric_text = (
+        amount_text
+        .str.replace(".", "", regex=False)
+        .str.replace(",", ".", regex=False)
+    )
 
     amount_missing_raw = amount_text.isna()
     df["amount"] = pd.to_numeric(amount_numeric_text, errors="coerce")
