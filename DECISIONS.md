@@ -63,3 +63,49 @@ Documento vivo de decisiones tecnicas. Cada seccion se ira ampliando conforme av
 - **Comparación posterior con el target**: comparé el top 200 contra `fla_churn90` solo como evaluación descriptiva posterior. Esta comparación ayuda a entender si el ranking captura más churners que la tasa base, pero no constituye una validación robusta porque se realiza sobre el mismo dataset de trabajo y no sobre un holdout temporal independiente.
 - **Interpretación del resultado**: el resultado descriptivo del top 200 no mejora claramente la tasa base de churn. Por tanto, considero esta heurística interpretable y útil para priorización exploratoria, pero no predictivamente validada.
 - **Trade-off**: el score no está calibrado ni validado contra outcomes externos; sirve para priorizar revisión humana o exploración inicial, no para automatizar decisiones comerciales.
+
+
+## Parte 2 - SQL
+
+### D8 - Lectura del modelo de datos del warehouse
+
+- **Qué hice**: antes de escribir las queries, interpreté el significado, grano y uso esperado de cada tabla (`merchants`, `transactions`, `churn_labels`). El objetivo fue evitar joins incorrectos, duplicaciones accidentales y agregaciones a un nivel equivocado.
+
+- **Grano asumido**:
+  - `merchants`: una fila por merchant.
+  - `transactions`: una fila por transacción.
+  - `churn_labels`: una fila por merchant y `reference_date`.
+
+- **Relaciones**:
+  - `merchants` se une con `transactions` por `merchant_id`.
+  - `merchants` se une con `churn_labels` por `merchant_id`.
+  - `transactions` puede tener muchas filas por merchant, por lo que cualquier métrica transaccional debe agregarse antes de interpretarse a nivel merchant.
+  - `churn_labels` puede contener distintos snapshots para un mismo merchant, por lo que siempre filtro por `reference_date` cuando calculo churn.
+
+- **Supuestos sobre campos**:
+  - `transaction_date` es la fecha de negocio para trimestres, meses y comparativas temporales.
+  - `dat_process` es fecha de procesamiento/partición y puede usarse para optimización, pero no como sustituto de la fecha de negocio.
+  - `amount` se asume numérico en warehouse. Si viniera como string con formato local, habría que parsearlo antes de calcular TPV.
+  - `status = 'approved'` representa transacción aprobada y es el estado que contribuye a TPV.
+  - `country = 'BR'` identifica merchants brasileños.
+  - `mcc` es categórico aunque pueda estar codificado como número.
+  - `fla_churn90` es una etiqueta a nivel merchant-snapshot, no una feature predictiva.
+
+- **Decisiones derivadas de este análisis**:
+  - Las métricas de TPV y approval rate se calculan desde `transactions`.
+  - Las métricas de churn se calculan a nivel merchant usando `churn_labels`.
+  - Para evitar mezclar snapshots, las consultas de churn filtran explícitamente `reference_date = DATE '2025-09-30'`.
+  - En las comparativas temporales uso `transaction_date`, manteniendo `dat_process` solo como posible ayuda de particionado/pruning.
+
+- **Riesgo si el supuesto es falso**: si `merchants` o `churn_labels` tienen duplicados no controlados, los joins pueden duplicar filas y alterar TPV, approval rate o churn rate. Si `transaction_date` y `dat_process` representan lógicas temporales distintas, usar la fecha incorrecta podría asignar transacciones al periodo equivocado.
+
+### D9 - Decisiones específicas de las queries SQL
+
+- **Q1**: interpreté Q3 2025 como el intervalo semiabierto `[2025-07-01, 2025-10-01)`. Preferí esta forma frente a `BETWEEN` para evitar ambigüedades si `transaction_date` contiene timestamp.
+- **Q1**: calculé TPV aprobado como suma de `amount` solo cuando `status = 'approved'`, manteniendo la definición usada en Parte 1.
+- **Q1**: calculé `approval_rate` como transacciones aprobadas dividido por total de transacciones del periodo.
+- **Q2**: calculé churn rate a nivel merchant, no a nivel transacción. Usé una CTE intermedia (`churn_by_segment`) para separar el cálculo de conteos del filtro `n_merchants >= 100`.
+- **Q3**: agregué TPV mensual por merchant y después hice un self-join contra el mismo mes del año anterior usando `ADD_MONTHS(month, -12)`.
+- **Q3**: si no existe TPV para el mismo mes de 2024, devuelvo `0` con `COALESCE`, interpretándolo como ausencia de volumen observado ese mes.
+- **Q4**: expliqué `dat_process` como una columna útil para partition pruning, pero manteniendo `transaction_date` como fecha de negocio.
+- **Trade-off**: no añadí lógica extra de deduplicación o normalización avanzada en las queries porque el enunciado presenta un esquema lógico de warehouse. Si los datos reales tuvieran duplicados o valores no normalizados, añadiría CTEs previas de validación/limpieza.
