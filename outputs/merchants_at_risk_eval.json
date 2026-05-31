@@ -1,0 +1,9 @@
+{
+  "top_n": 200,
+  "precision_at_200": 0.085,
+  "global_churn_rate": 0.08745742336205169,
+  "lift_at_200": 0.9719014891179841,
+  "captured_churners_at_200": 17,
+  "total_churners": 873,
+  "recall_at_200": 0.019473081328751432
+}

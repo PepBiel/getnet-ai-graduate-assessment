@@ -422,6 +422,172 @@ def test_quality_report_summary_includes_context_metrics() -> None:
     assert summary["amount_max"] == 50.0
 
 
+def test_merchants_at_risk_prioritizes_deteriorating_merchants() -> None:
+    from src.parte1_pandas import merchants_at_risk
+
+    df = pd.DataFrame(
+        {
+            "transaction_id": [1, 2, 3, 4, 5],
+            "merchant_id": [1, 1, 1, 2, 2],
+            "transaction_date": pd.to_datetime(
+                [
+                    "2025-05-01",
+                    "2025-09-01",
+                    "2025-09-05",
+                    "2025-05-01",
+                    "2025-09-01",
+                ]
+            ),
+            "reference_date": pd.to_datetime(
+                [
+                    "2025-09-30",
+                    "2025-09-30",
+                    "2025-09-30",
+                    "2025-09-30",
+                    "2025-09-30",
+                ]
+            ),
+            "amount": [1000.0, 10.0, 10.0, 100.0, 100.0],
+            "status": ["approved", "denied", "reversed", "approved", "approved"],
+            "channel": ["pos", "pos", "ecom", "pos", "pos"],
+            "last_complaint_date": pd.to_datetime(
+                ["2025-09-20", "2025-09-20", "2025-09-20", None, None]
+            ),
+            "cancellation_reason": ["price", "price", "price", pd.NA, pd.NA],
+            "fla_churn90": [1, 1, 1, 0, 0],
+        }
+    )
+
+    result = merchants_at_risk(df, top_n=2)
+
+    expected_columns = {
+        "merchant_id",
+        "risk_score",
+        "top_signal",
+        "recent_tpv",
+        "previous_tpv",
+        "recent_n_tx",
+        "previous_n_tx",
+        "recent_approval_rate",
+        "previous_approval_rate",
+        "bad_status_rate_recent",
+        "days_since_last_tx",
+        "median_days_between_tx",
+        "days_since_last_complaint_safe",
+        "has_safe_tx_history",
+    }
+    assert expected_columns.issubset(result.columns)
+    assert result["risk_score"].is_monotonic_decreasing
+    assert result.iloc[0]["merchant_id"] == 1
+    assert result.iloc[0]["risk_score"] > result.iloc[1]["risk_score"]
+    assert result.iloc[0]["top_signal"] in {
+        "tpv_drop",
+        "approval_rate_drop",
+        "bad_status_rate",
+        "recent_complaint",
+    }
+
+
+def test_merchants_at_risk_ignores_future_transactions_and_complaints() -> None:
+    from src.parte1_pandas import merchants_at_risk
+
+    df = pd.DataFrame(
+        {
+            "transaction_id": [1, 2, 3],
+            "merchant_id": [1, 1, 2],
+            "transaction_date": pd.to_datetime(
+                ["2025-05-01", "2025-10-01", "2025-10-02"]
+            ),
+            "reference_date": pd.to_datetime(["2025-09-30", "2025-09-30", "2025-09-30"]),
+            "amount": [100.0, 9999.0, 9999.0],
+            "status": ["approved", "denied", "denied"],
+            "channel": ["pos", "pos", "pos"],
+            "last_complaint_date": pd.to_datetime(["2025-10-05", "2025-10-05", "2025-10-05"]),
+            "fla_churn90": [0, 1, 1],
+            "cancellation_reason": [pd.NA, "price", "price"],
+        }
+    )
+
+    result = merchants_at_risk(df, top_n=10)
+
+    assert set(result["merchant_id"]) == {1, 2}
+
+    merchant_1 = result.loc[result["merchant_id"].eq(1)].iloc[0]
+    merchant_2 = result.loc[result["merchant_id"].eq(2)].iloc[0]
+
+    assert merchant_1["recent_tpv"] == 0.0
+    assert merchant_1["bad_status_rate_recent"] == 0.0
+    assert pd.isna(merchant_1["days_since_last_complaint_safe"])
+
+    assert merchant_2["recent_tpv"] == 0.0
+    assert merchant_2["previous_tpv"] == 0.0
+    assert merchant_2["bad_status_rate_recent"] == 0.0
+    assert pd.isna(merchant_2["days_since_last_complaint_safe"])
+    assert not bool(merchant_2["has_safe_tx_history"])
+    assert merchant_2["risk_score"] == 0.0
+    assert merchant_2["top_signal"] == "no_signal"
+
+
+def test_merchants_at_risk_uses_relative_inactivity_signal() -> None:
+    from src.parte1_pandas import merchants_at_risk
+
+    df = pd.DataFrame(
+        {
+            "transaction_id": list(range(1, 8)),
+            "merchant_id": [1, 1, 1, 1, 2, 2, 2],
+            "transaction_date": pd.to_datetime(
+                [
+                    "2025-08-01",
+                    "2025-08-05",
+                    "2025-08-10",
+                    "2025-08-15",
+                    "2025-07-01",
+                    "2025-08-01",
+                    "2025-09-01",
+                ]
+            ),
+            "reference_date": pd.to_datetime(["2025-09-30"] * 7),
+            "amount": [100.0] * 7,
+            "status": ["approved"] * 7,
+            "channel": ["pos"] * 7,
+            "last_complaint_date": pd.to_datetime([None] * 7),
+            "cancellation_reason": [pd.NA] * 7,
+            "fla_churn90": [0] * 7,
+        }
+    )
+
+    result = merchants_at_risk(df, top_n=10)
+
+    merchant_1 = result.loc[result["merchant_id"].eq(1)].iloc[0]
+    merchant_2 = result.loc[result["merchant_id"].eq(2)].iloc[0]
+
+    assert merchant_1["top_signal"] == "inactivity"
+    assert merchant_1["risk_score"] > merchant_2["risk_score"]
+    assert merchant_1["median_days_between_tx"] < merchant_2["median_days_between_tx"]
+
+
+def test_merchants_at_risk_handles_top_n_and_missing_columns() -> None:
+    from src.parte1_pandas import merchants_at_risk
+
+    df = pd.DataFrame(
+        {
+            "merchant_id": [1],
+            "transaction_date": pd.to_datetime(["2025-09-01"]),
+            "reference_date": pd.to_datetime(["2025-09-30"]),
+            "amount": [100.0],
+            "status": ["approved"],
+            "channel": ["pos"],
+        }
+    )
+
+    empty = merchants_at_risk(df.drop(columns=["status", "channel"]), top_n=0)
+    assert empty.empty
+    assert {"merchant_id", "risk_score", "top_signal"}.issubset(empty.columns)
+
+    with pytest.raises(ValueError, match="Missing required columns"):
+        merchants_at_risk(df.drop(columns=["status"]))
+
+
 # TODO: añade tus tests reales. Ejemplos:
 #
 # def test_monthly_kpis_returns_one_row_per_merchant_month(tiny_df):

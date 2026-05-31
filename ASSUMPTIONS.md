@@ -64,3 +64,31 @@ Documento vivo de supuestos. Se ira ampliando conforme avance la solucion.
 - **Qué supuse**: dado que aparece también en transacciones aprobadas y está fuertemente asociada a `fla_churn90`, la trato como información sensible a leakage y no como señal operativa de una transacción.
 - **Cómo lo verificaría con stakeholder**: confirmaría cuándo se registra `cancellation_reason` y si estaba disponible antes del snapshot de análisis.
 - **Impacto si mi supuesto es falso**: si la columna sí estuviera disponible antes del snapshot, podríamos estar descartando una señal útil. Sin esa confirmación, la opción segura es excluirla de features predictivas.
+
+## A10 - Señal débil de pre-churn
+
+- **Qué dice el spec ambiguamente**: no define qué significa exactamente "señal débil" ni qué ventana temporal usar.
+- **Qué supuse**: una señal débil de pre-churn es deterioro reciente de uso o calidad operativa observable antes de `reference_date`: menos TPV, menos transacciones, menor aprobación, más denegadas/reversadas, inactividad o reclamo reciente.
+- **Cómo lo verificaría con stakeholder**: contrastaría la heurística con equipos de retención y operaciones, revisando si los merchants priorizados son accionables y si las señales coinciden con casos reales de riesgo.
+- **Impacto si mi supuesto es falso**: el ranking puede priorizar merchants con patrones estacionales o de bajo volumen que no estén realmente en riesgo. Por eso lo trato como ranking explicable, no como predicción calibrada.
+
+## A11 - Ventanas temporales para la heurística
+
+- **Qué dice el spec ambiguamente**: no especifica qué periodo usar para comparar actividad reciente frente a actividad anterior.
+- **Qué supuse**: uso los últimos 3 meses calendario hasta `reference_date` como periodo reciente y los 3 meses anteriores como periodo base.
+- **Cómo lo verificaría con stakeholder**: validaría si negocio prefiere ventanas de 30/60/90 días, meses calendario cerrados o comparación contra el mismo periodo del año anterior.
+- **Impacto si mi supuesto es falso**: merchants con estacionalidad fuerte podrían quedar mal priorizados. En producción compararía contra ventanas equivalentes históricas o validaría la heurística con outcomes reales.
+
+## A12 - Inactividad relativa al patrón del merchant
+
+- **Qué dice el spec ambiguamente**: no define cuándo un merchant debe considerarse inactivo o en deterioro.
+- **Qué supuse**: un número alto de días desde la última transacción solo es una señal fuerte si es alto respecto al patrón habitual del propio merchant. Por eso comparo `days_since_last_tx` con la mediana histórica de días entre transacciones.
+- **Cómo lo verificaría con stakeholder**: validaría si distintos segmentos, MCCs o tipos de merchant tienen cadencias esperadas diferentes.
+- **Impacto si mi supuesto es falso**: merchants con transacciones naturalmente poco frecuentes podrían recibir una puntuación incorrecta. La comparación relativa reduce este riesgo, pero no sustituye una validación de negocio.
+
+## A13 - Historial insuficiente antes del snapshot
+
+- **Qué dice el spec ambiguamente**: no especifica cómo tratar merchants que solo tienen transacciones posteriores a `reference_date`.
+- **Qué supuse**: si un merchant no tiene transacciones seguras antes del snapshot, no lo trato como inactivo. Lo marco como falta de historial observable y no le asigno riesgo por inactividad.
+- **Cómo lo verificaría con stakeholder**: preguntaría si esos merchants son altas recientes, errores de extracción o casos esperados por el diseño del dataset.
+- **Impacto si mi supuesto es falso**: si realmente deberían considerarse inactivos, la heurística podría infraestimar su riesgo. Prefiero esta opción porque evita crear señales de churn a partir de ausencia de evidencia.

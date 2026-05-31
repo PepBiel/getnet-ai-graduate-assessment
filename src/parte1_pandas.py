@@ -677,8 +677,258 @@ def merchants_at_risk(df: pd.DataFrame, top_n: int = 200) -> pd.DataFrame:
     Returns:
         DataFrame ordenado por risk_score descendente.
     """
-    # TODO: implementa
-    raise NotImplementedError("Parte 1.4 · merchants_at_risk")
+    output_columns = [
+        "merchant_id",
+        "risk_score",
+        "top_signal",
+        "recent_tpv",
+        "previous_tpv",
+        "recent_n_tx",
+        "previous_n_tx",
+        "recent_approval_rate",
+        "previous_approval_rate",
+        "bad_status_rate_recent",
+        "days_since_last_tx",
+        "median_days_between_tx",
+        "days_since_last_complaint_safe",
+        "has_safe_tx_history",
+    ]
+
+    if top_n <= 0:
+        return pd.DataFrame(columns=output_columns)
+
+    required_columns = {
+        "merchant_id",
+        "transaction_date",
+        "reference_date",
+        "amount",
+        "status",
+        "channel",
+    }
+    missing_columns = required_columns - set(df.columns)
+    if missing_columns:
+        raise ValueError(
+            f"Missing required columns for merchants_at_risk: {sorted(missing_columns)}"
+        )
+
+    work = df.copy()
+
+    work = work[
+        work["merchant_id"].notna()
+        & work["transaction_date"].notna()
+        & work["reference_date"].notna()
+    ].copy()
+
+    if work.empty:
+        return pd.DataFrame(columns=output_columns)
+
+    merchant_reference = (
+        work.groupby("merchant_id", as_index=False)["reference_date"]
+        .max()
+        .rename(columns={"reference_date": "merchant_reference_date"})
+    )
+
+    work = work.merge(merchant_reference, on="merchant_id", how="left")
+    safe_tx = work[work["transaction_date"] <= work["merchant_reference_date"]].copy()
+
+    last_tx = (
+        safe_tx.groupby("merchant_id", as_index=False)["transaction_date"]
+        .max()
+        .rename(columns={"transaction_date": "last_transaction_date"})
+    )
+
+    features = merchant_reference.merge(last_tx, on="merchant_id", how="left")
+    features["has_safe_tx_history"] = features["last_transaction_date"].notna()
+    features["days_since_last_tx"] = (
+        features["merchant_reference_date"] - features["last_transaction_date"]
+    ).dt.days
+
+    safe_tx = safe_tx.sort_values(["merchant_id", "transaction_date"]).copy()
+    safe_tx["previous_transaction_date"] = (
+        safe_tx.groupby("merchant_id")["transaction_date"].shift(1)
+    )
+    safe_tx["days_between_tx"] = (
+        safe_tx["transaction_date"] - safe_tx["previous_transaction_date"]
+    ).dt.days
+    median_gap = (
+        safe_tx.groupby("merchant_id", as_index=False)["days_between_tx"]
+        .median()
+        .rename(columns={"days_between_tx": "median_days_between_tx"})
+    )
+    features = features.merge(median_gap, on="merchant_id", how="left")
+
+    safe_tx["tx_month_index"] = (
+        safe_tx["transaction_date"].dt.year * 12 + safe_tx["transaction_date"].dt.month
+    )
+    safe_tx["ref_month_index"] = (
+        safe_tx["merchant_reference_date"].dt.year * 12
+        + safe_tx["merchant_reference_date"].dt.month
+    )
+    safe_tx["months_from_ref"] = safe_tx["tx_month_index"] - safe_tx["ref_month_index"]
+
+    safe_tx["period"] = pd.NA
+    safe_tx.loc[safe_tx["months_from_ref"].between(-2, 0), "period"] = "recent"
+    safe_tx.loc[safe_tx["months_from_ref"].between(-5, -3), "period"] = "previous"
+
+    period_tx = safe_tx[safe_tx["period"].notna()].copy()
+
+    if period_tx.empty:
+        for column in [
+            "recent_tpv",
+            "previous_tpv",
+            "recent_n_tx",
+            "previous_n_tx",
+            "recent_approval_rate",
+            "previous_approval_rate",
+            "recent_bad_tx",
+            "previous_bad_tx",
+        ]:
+            features[column] = 0.0
+    else:
+        is_approved = period_tx["status"].eq("approved")
+        is_bad_status = period_tx["status"].isin(["denied", "reversed"])
+
+        period_tx["approved_amount"] = period_tx["amount"].where(is_approved, 0.0)
+        period_tx["approved_tx"] = is_approved.astype(int)
+        period_tx["bad_tx"] = is_bad_status.astype(int)
+
+        period_agg = (
+            period_tx.groupby(["merchant_id", "period"], as_index=False)
+            .agg(
+                tpv=("approved_amount", "sum"),
+                n_tx=("merchant_id", "size"),
+                approved_tx=("approved_tx", "sum"),
+                bad_tx=("bad_tx", "sum"),
+            )
+        )
+
+        period_agg["approval_rate"] = (
+            period_agg["approved_tx"].div(period_agg["n_tx"]).fillna(0.0)
+        )
+
+        period_wide = period_agg.pivot(
+            index="merchant_id",
+            columns="period",
+            values=["tpv", "n_tx", "approval_rate", "bad_tx"],
+        )
+        period_wide.columns = [
+            f"{period}_{metric}" for metric, period in period_wide.columns
+        ]
+        period_wide = period_wide.reset_index()
+
+        features = features.merge(period_wide, on="merchant_id", how="left")
+
+    metric_columns = [
+        "recent_tpv",
+        "previous_tpv",
+        "recent_n_tx",
+        "previous_n_tx",
+        "recent_approval_rate",
+        "previous_approval_rate",
+        "recent_bad_tx",
+        "previous_bad_tx",
+    ]
+
+    for column in metric_columns:
+        if column not in features.columns:
+            features[column] = 0.0
+        features[column] = pd.to_numeric(features[column], errors="coerce").fillna(0.0)
+
+    if "last_complaint_date" in work.columns:
+        safe_complaints = work[
+            work["last_complaint_date"].notna()
+            & (work["last_complaint_date"] <= work["merchant_reference_date"])
+        ].copy()
+
+        if safe_complaints.empty:
+            features["days_since_last_complaint_safe"] = pd.NA
+        else:
+            last_safe_complaint = (
+                safe_complaints.groupby("merchant_id", as_index=False)["last_complaint_date"]
+                .max()
+                .rename(columns={"last_complaint_date": "last_complaint_date_safe"})
+            )
+            features = features.merge(last_safe_complaint, on="merchant_id", how="left")
+            features["days_since_last_complaint_safe"] = (
+                features["merchant_reference_date"] - features["last_complaint_date_safe"]
+            ).dt.days
+    else:
+        features["days_since_last_complaint_safe"] = pd.NA
+
+    features["tpv_drop_score"] = (
+        (features["previous_tpv"] - features["recent_tpv"])
+        .div(features["previous_tpv"])
+        .where(features["previous_tpv"] > 0, 0.0)
+        .clip(lower=0.0, upper=1.0)
+        .fillna(0.0)
+    )
+    features["tx_drop_score"] = (
+        (features["previous_n_tx"] - features["recent_n_tx"])
+        .div(features["previous_n_tx"])
+        .where(features["previous_n_tx"] > 0, 0.0)
+        .clip(lower=0.0, upper=1.0)
+        .fillna(0.0)
+    )
+    features["approval_drop_score"] = (
+        features["previous_approval_rate"]
+        .sub(features["recent_approval_rate"])
+        .where(features["previous_n_tx"] >= 5, 0.0)
+        .clip(lower=0.0, upper=1.0)
+        .fillna(0.0)
+    )
+    features["bad_status_rate_recent"] = (
+        features["recent_bad_tx"].div(features["recent_n_tx"]).fillna(0.0)
+    ).clip(lower=0.0, upper=1.0)
+    features["median_days_between_tx"] = features["median_days_between_tx"].fillna(30)
+    relative_inactivity_score = (
+        features["days_since_last_tx"]
+        .div(features["median_days_between_tx"].clip(lower=1))
+        .sub(1.0)
+        .div(2.0)
+        .clip(lower=0.0, upper=1.0)
+    )
+    absolute_inactivity_score = (
+        (features["days_since_last_tx"] - 14)
+        .div(46)
+        .clip(lower=0.0, upper=1.0)
+    )
+    features["inactivity_score"] = (
+        (0.6 * relative_inactivity_score + 0.4 * absolute_inactivity_score)
+        .where(features["has_safe_tx_history"], 0.0)
+        .fillna(0.0)
+    )
+    days_since_complaint_safe = pd.to_numeric(
+        features["days_since_last_complaint_safe"], errors="coerce"
+    )
+    features["recent_complaint_score"] = (
+        (30 - days_since_complaint_safe)
+        .div(30)
+        .clip(lower=0.0, upper=1.0)
+        .fillna(0.0)
+    )
+
+    signal_components = pd.DataFrame(
+        {
+            "tpv_drop": features["tpv_drop_score"] * 35,
+            "tx_drop": features["tx_drop_score"] * 20,
+            "approval_rate_drop": features["approval_drop_score"] * 15,
+            "bad_status_rate": features["bad_status_rate_recent"] * 10,
+            "inactivity": features["inactivity_score"] * 10,
+            "recent_complaint": features["recent_complaint_score"] * 10,
+        },
+        index=features.index,
+    )
+
+    features["risk_score"] = signal_components.sum(axis=1).round(4)
+    features["top_signal"] = signal_components.idxmax(axis=1)
+    features.loc[features["risk_score"].eq(0), "top_signal"] = "no_signal"
+
+    result = features[output_columns].copy()
+    return (
+        result.sort_values(["risk_score", "merchant_id"], ascending=[False, True])
+        .head(top_n)
+        .reset_index(drop=True)
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -700,7 +950,39 @@ def main(csv_path: str) -> None:
     at_risk = merchants_at_risk(df, top_n=200)
     at_risk.to_csv(outputs / "merchants_at_risk.csv", index=False)
 
-    print("✓ Outputs generados en outputs/")
+    if {"merchant_id", "fla_churn90"}.issubset(df.columns):
+        merchant_target = (
+            df.dropna(subset=["merchant_id"])
+            .groupby("merchant_id", as_index=False)["fla_churn90"]
+            .first()
+        )
+        at_risk_with_labels = at_risk.merge(merchant_target, on="merchant_id", how="left")
+        at_risk_with_labels.to_csv(outputs / "merchants_at_risk_with_labels.csv", index=False)
+
+        precision_at_200 = float(at_risk_with_labels["fla_churn90"].eq(1).mean())
+        global_churn_rate = float(merchant_target["fla_churn90"].eq(1).mean())
+        captured_churners_at_200 = int(at_risk_with_labels["fla_churn90"].eq(1).sum())
+        total_churners = int(merchant_target["fla_churn90"].eq(1).sum())
+        ranking_eval = {
+            "top_n": int(len(at_risk_with_labels)),
+            "precision_at_200": precision_at_200,
+            "global_churn_rate": global_churn_rate,
+            "lift_at_200": (
+                precision_at_200 / global_churn_rate
+                if global_churn_rate > 0
+                else float("nan")
+            ),
+            "captured_churners_at_200": captured_churners_at_200,
+            "total_churners": total_churners,
+            "recall_at_200": (
+                captured_churners_at_200 / total_churners if total_churners > 0 else float("nan")
+            ),
+        }
+        (outputs / "merchants_at_risk_eval.json").write_text(
+            json.dumps(ranking_eval, indent=2, default=str)
+        )
+
+    print("OK Outputs generados en outputs/")
 
 
 if __name__ == "__main__":
