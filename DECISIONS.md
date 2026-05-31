@@ -31,3 +31,11 @@ Documento vivo de decisiones tecnicas. Cada seccion se ira ampliando conforme av
 - **Por que**: `transaction_id` puede ser unico aunque dos filas representen el mismo evento de negocio. Excluir columnas raw evita que un mismo evento no se detecte como duplicado solo por diferencias de formato ya normalizadas.
 - **Que descarte**: deduplicar solo por `transaction_id` o eliminar duplicados antes de parsear tipos.
 - **Que supuse**: si todas las columnas de negocio normalizadas coinciden, conservar la primera fila es suficiente para KPIs de esta prueba.
+
+### D5 - Definiciones de KPIs mensuales
+
+- **Que hice**: calcule KPIs mensuales a nivel `merchant_id` x `month`, usando `transaction_date` para derivar el mes calendario.
+- **Definiciones**: `tpv` es la suma de `amount` para transacciones con `status = approved`; `approval_rate` es transacciones aprobadas dividido por transacciones totales; `pct_ecom` es TPV aprobado de canal `ecom` dividido por TPV aprobado total; `n_tx` es el numero total de transacciones del merchant-mes.
+- **Por que**: TPV representa volumen de pagos procesado con exito, por lo que las transacciones denegadas o reversadas no contribuyen al volumen. En cambio, `n_tx` incluye todos los estados porque mide actividad e intentos, no solo pagos exitosos.
+- **Que descarte**: contar `pct_ecom` por numero de transacciones, incluir denegadas/reversadas en TPV, filtrar por `reference_date` dentro de una funcion general de agregacion o eliminar outliers durante el calculo mensual.
+- **Trade-off**: los importes faltantes en transacciones aprobadas no se imputan, asi que el TPV puede quedar subestimado en merchant-meses afectados. Prefiero dejar visible el problema para `quality_report` antes que inventar volumen.

@@ -115,6 +115,114 @@ def test_load_clean_requires_core_columns(tmp_path) -> None:
         load_clean(path)
 
 
+def test_monthly_kpis_computes_expected_metrics() -> None:
+    from src.parte1_pandas import monthly_kpis
+
+    df = pd.DataFrame(
+        {
+            "transaction_id": ["t1", "t2", "t3", "t4"],
+            "merchant_id": [1, 1, 1, 1],
+            "transaction_date": pd.to_datetime(
+                ["2025-07-01", "2025-07-02", "2025-07-03", "2025-07-04"]
+            ),
+            "amount": [100.0, 50.0, 20.0, 30.0],
+            "status": ["approved", "approved", "denied", "reversed"],
+            "channel": ["ecom", "pos", "ecom", "pos"],
+        }
+    )
+
+    result = monthly_kpis(df)
+
+    assert result.columns.tolist() == [
+        "merchant_id",
+        "month",
+        "tpv",
+        "approval_rate",
+        "pct_ecom",
+        "n_tx",
+    ]
+    assert len(result) == 1
+
+    row = result.iloc[0]
+    assert row["merchant_id"] == 1
+    assert row["month"] == pd.Timestamp("2025-07-01")
+    assert row["tpv"] == 150.0
+    assert row["n_tx"] == 4
+    assert row["approval_rate"] == 0.5
+    assert row["pct_ecom"] == pytest.approx(100.0 / 150.0)
+
+
+def test_monthly_kpis_handles_zero_tpv() -> None:
+    from src.parte1_pandas import monthly_kpis
+
+    df = pd.DataFrame(
+        {
+            "transaction_id": ["t1", "t2"],
+            "merchant_id": [1, 1],
+            "transaction_date": pd.to_datetime(["2025-07-01", "2025-07-02"]),
+            "amount": [100.0, 50.0],
+            "status": ["denied", "reversed"],
+            "channel": ["ecom", "pos"],
+        }
+    )
+
+    result = monthly_kpis(df)
+
+    assert len(result) == 1
+    row = result.iloc[0]
+    assert row["merchant_id"] == 1
+    assert row["month"] == pd.Timestamp("2025-07-01")
+    assert row["tpv"] == 0.0
+    assert row["approval_rate"] == 0.0
+    assert row["pct_ecom"] == 0.0
+    assert row["n_tx"] == 2
+
+
+def test_monthly_kpis_groups_by_merchant_and_month() -> None:
+    from src.parte1_pandas import monthly_kpis
+
+    df = pd.DataFrame(
+        {
+            "transaction_id": ["t1", "t2", "t3"],
+            "merchant_id": [1, 1, 2],
+            "transaction_date": pd.to_datetime(
+                ["2025-07-01", "2025-08-01", "2025-07-15"]
+            ),
+            "amount": [100.0, 200.0, 300.0],
+            "status": ["approved", "approved", "approved"],
+            "channel": ["pos", "ecom", "ecom"],
+        }
+    )
+
+    result = monthly_kpis(df)
+
+    expected_months = {
+        (1, pd.Timestamp("2025-07-01")),
+        (1, pd.Timestamp("2025-08-01")),
+        (2, pd.Timestamp("2025-07-01")),
+    }
+    actual_months = set(zip(result["merchant_id"], result["month"]))
+
+    assert len(result) == 3
+    assert actual_months == expected_months
+
+
+def test_monthly_kpis_raises_on_missing_required_columns() -> None:
+    from src.parte1_pandas import monthly_kpis
+
+    df = pd.DataFrame(
+        {
+            "merchant_id": [1],
+            "transaction_date": pd.to_datetime(["2025-07-01"]),
+            "amount": [100.0],
+            "status": ["approved"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="Missing required columns"):
+        monthly_kpis(df)
+
+
 # TODO: añade tus tests reales. Ejemplos:
 #
 # def test_monthly_kpis_returns_one_row_per_merchant_month(tiny_df):

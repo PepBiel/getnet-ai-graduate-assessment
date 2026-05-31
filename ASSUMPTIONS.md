@@ -22,3 +22,24 @@ Documento vivo de supuestos. Se ira ampliando conforme avance la solucion.
 - **Que supuse**: `load_clean` debe conservarlas; la exclusion por leakage debe ocurrir al construir features predictivas.
 - **Como lo verificaria con stakeholder**: confirmaria que informacion esta disponible en el momento real de prediccion y que informacion es posterior al evento.
 - **Impacto si mi supuesto es falso**: si se usan sin filtro temporal en Parte 3, el modelo podria aprender informacion futura. Por eso no se usaran directamente como features predictivas.
+
+## A4 - TPV como volumen aprobado
+
+- **Que dice el spec ambiguamente**: el enunciado pide `tpv`, pero no explicita si incluye intentos fallidos o reversados.
+- **Que supuse**: TPV significa volumen de pago procesado con exito, por lo que solo uso transacciones con `status = approved`.
+- **Como lo verificaria con stakeholder**: preguntaria si Getnet reporta TPV bruto, neto o aprobado en sus dashboards oficiales.
+- **Impacto si mi supuesto es falso**: los KPIs mensuales podrian diferir de reportes financieros que incluyan reversos u otros ajustes contables.
+
+## A5 - Porcentaje e-commerce basado en volumen
+
+- **Que dice el spec ambiguamente**: `pct_ecom` puede interpretarse como porcentaje de transacciones o porcentaje de volumen.
+- **Que supuse**: `pct_ecom` es la proporcion del TPV aprobado que viene del canal `ecom`, no la proporcion de conteos.
+- **Como lo verificaria con stakeholder**: confirmaria si el indicador se usa para mix de volumen, mix operativo o ambos.
+- **Impacto si mi supuesto es falso**: merchants con pocas transacciones e-commerce de alto importe tendrian una lectura distinta si se mide por conteo.
+
+## A6 - Mes de negocio segun `transaction_date`
+
+- **Que dice el spec ambiguamente**: existen `transaction_date` y `dat_process`, y ambas podrian usarse para agrupar por mes.
+- **Que supuse**: el mes del KPI se deriva de `transaction_date`; `dat_process` es una fecha operativa de procesamiento.
+- **Como lo verificaria con stakeholder**: validaria con el equipo de negocio que los KPIs mensuales se reportan por fecha de transaccion y no por fecha de ingesta/procesamiento.
+- **Impacto si mi supuesto es falso**: algunos pagos cerca de cierre de mes podrian asignarse a un mes distinto en dashboards operativos.

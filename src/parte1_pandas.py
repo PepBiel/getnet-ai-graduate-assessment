@@ -147,8 +147,53 @@ def monthly_kpis(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame con los KPIs.
     """
-    # TODO: implementa
-    raise NotImplementedError("Parte 1.2 · monthly_kpis")
+    required_columns = {
+        "merchant_id",
+        "transaction_date",
+        "amount",
+        "status",
+        "channel",
+    }
+    missing_columns = required_columns - set(df.columns)
+    if missing_columns:
+        raise ValueError(
+            f"Missing required columns for monthly_kpis: {sorted(missing_columns)}"
+        )
+
+    work = df.copy()
+    work = work[work["merchant_id"].notna() & work["transaction_date"].notna()].copy()
+
+    work["month"] = work["transaction_date"].dt.to_period("M").dt.to_timestamp()
+
+    is_approved = work["status"].eq("approved")
+    is_ecom = work["channel"].eq("ecom")
+
+    work["approved_amount"] = work["amount"].where(is_approved, 0.0)
+    work["approved_ecom_amount"] = work["amount"].where(is_approved & is_ecom, 0.0)
+    work["approved_tx"] = is_approved.astype(int)
+
+    grouped = (
+        work.groupby(["merchant_id", "month"], as_index=False)
+        .agg(
+            tpv=("approved_amount", "sum"),
+            approved_tx=("approved_tx", "sum"),
+            ecom_tpv=("approved_ecom_amount", "sum"),
+            n_tx=("merchant_id", "size"),
+        )
+    )
+
+    grouped["approval_rate"] = grouped["approved_tx"] / grouped["n_tx"]
+    grouped["pct_ecom"] = (
+        grouped["ecom_tpv"]
+        .div(grouped["tpv"])
+        .where(grouped["tpv"] > 0, 0.0)
+        .fillna(0.0)
+    )
+
+    result = grouped[
+        ["merchant_id", "month", "tpv", "approval_rate", "pct_ecom", "n_tx"]
+    ].copy()
+    return result.sort_values(["merchant_id", "month"]).reset_index(drop=True)
 
 
 # -----------------------------------------------------------------------------
