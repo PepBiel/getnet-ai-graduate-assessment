@@ -1,167 +1,433 @@
-# Take-Home Technical Test — Getnet AI Lab Graduate Program 2026
+# Getnet AI Lab Graduate Program 2026 · Take-home solution
 
-**Bienvenido/a.** Esto es el `README.md` que acompaña al `.zip` con tu prueba técnica. Léelo entero antes de tocar código (10 min).
+Solución del take-home técnico para el AI Lab de Getnet. El repositorio implementa las cuatro partes obligatorias del ejercicio:
 
-> **TL;DR:** tienes **72 h**. Implementa 4 partes (pandas, SQL, ML, API con Agno). Documenta tus decisiones con rigor. Entrega un `.zip` por el link que te hemos enviado. **Aceptamos que uses LLMs** — el test mide tu criterio, no tu sintaxis. Si pasas, hay **entrevista técnica** donde defiendes en directo lo que has entregado.
+1. **Parte 1 · Pandas + EDA**: limpieza, KPIs mensuales, reporte de calidad de datos y ranking heurístico de merchants en riesgo.
+2. **Parte 2 · SQL**: queries analíticas para métricas, churn y agregaciones de negocio.
+3. **Parte 3 · ML**: modelo de churn a nivel merchant, métricas, interpretabilidad y model card.
+4. **Parte 4 · FastAPI + Agno**: API para clasificar reclamaciones de merchants con guardrails, redacción de PII, contexto de merchant y cola de revisión humana.
 
----
+La documentación de criterio está en:
 
-## 1. ¿Qué es esto?
-
-El **AI Lab Getnet** (Data & AI del adquirente global de Santander) opera un portafolio de modelos predictivos, causales y agentic workflows en BR, MX, CL, AR y EU.
-
-Buscamos personas para un **Graduate Program de 12 meses**. Este test mide cómo piensas y comunicas decisiones técnicas, no cuánto código produces.
-
----
-
-## 2. Mapa del `.zip`
-
-```
-takehome_candidate_starter/
-├── README.md                       ← este documento
-├── STATEMENT.md                    ← enunciado completo y oficial (LEE ANTES DE CODEAR)
-├── Makefile                        ← targets de conveniencia (setup, test, run)
-├── .gitignore
-├── pyproject.toml                  ← packaging 
-├── data/
-│   ├── README.md                   ← descripción del dataset
-│   ├── transactions_sample.csv     ← 200k filas · ~80 MB · OJO: contiene trampas a propósito
-│   └── merchants_context.json      ← ~500 merchants para la tool de Parte 4
-├── src/
-│   ├── parte1_pandas.py
-│   ├── parte2_sql.sql
-│   ├── parte3_modeling.ipynb
-│   └── parte4_api/
-│       ├── __init__.py
-│       ├── main.py
-│       ├── agent.py
-│       ├── schemas.py
-│       └── README.md
-├── tests/
-│   ├── __init__.py
-│   ├── test_solution.py
-│   └── test_api.py
-├── outputs/
-│   └── .gitkeep
-└── templates/
-    ├── DECISIONS.md
-    ├── ASSUMPTIONS.md
-    ├── SELF_REVIEW.md
-    └── TOOLS_USED.md
-```
+- `DECISIONS.md`
+- `ASSUMPTIONS.md`
+- `SELF_REVIEW.md`
+- `TOOLS_USED.md`
 
 ---
 
-## 3. Setup en 4 pasos (≤ 5 min)
+## 1. Requisitos
 
-Prerrequisitos: **Python 3.10/3.11/3.12** · **Git** · **[uv](https://docs.astral.sh/uv/)** (gestor moderno de dependencias y venv, el que usamos en el lab) · ~2 GB libres.
+Probado con:
 
-Si no tienes uv:
+- Python `>=3.10,<3.14`
+- `uv` como gestor de dependencias
+- FastAPI + Uvicorn para la API
+- `MOCK_LLM=1` para ejecutar tests y API sin depender de una API key externa
+
+Instalación recomendada de `uv` si no está disponible:
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh    # Linux/Mac
-# powershell -c "irm https://astral.sh/uv/install.ps1 | iex"   # Windows
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Después:
+Fallback con `pip`:
 
 ```bash
-# 1. Descomprime y entra al directorio
-unzip takehome_candidate_starter.zip
-cd takehome_candidate_starter/
+python -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -e ".[dev]"
+```
 
-# 2. Inicializa git INMEDIATAMENTE (el historial se evalúa)
-git init && git add . && git commit -m "chore: initial starter from Getnet AI Lab"
+---
 
-# 3. Resolver y crear venv en 1 comando (uv lee pyproject.toml + bloquea versiones en uv.lock)
+## 2. Setup rápido
+
+Desde la raíz del repositorio:
+
+```bash
 uv sync --extra dev
-
-# 4. Sanity check + arranque mínimo viable de la API (debe responder 200 en /health)
-uv run python -c "import pandas, sklearn, fastapi, uvicorn, agno, pydantic; print('OK · environment ready')"
-MOCK_LLM=1 uv run uvicorn src.parte4_api.main:app --port 8000 &
-sleep 2 && curl -s http://localhost:8000/health && kill %1
 ```
 
-> **Atajo:** `make setup` ejecuta el paso 3 y `make run` el arranque de la API.
-
-### Fallback con `pip` (sin uv)
-
-Si por política de tu máquina no puedes instalar uv, hay alternativa equivalente:
+Sanity check del entorno:
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install --upgrade pip && pip install -e ".[dev]"
+uv run python -c "import pandas, sklearn, fastapi, uvicorn, agno, pydantic; print('OK')"
 ```
 
-Nos sirve igual, pero **recomendamos uv** porque es lo que corre el evaluador y porque hace `pip install` 10–100× más rápido.
-
-Si el sanity check falla, abre incidencia con tu reclutador antes de empezar — no descuenta tiempo.
-
----
-
-## 4. Copia las plantillas a la raíz
-
-Las plantillas en `templates/` deben copiarse a la **raíz del proyecto** y rellenarse. Son entregables obligatorios.
+También se puede usar:
 
 ```bash
-cp templates/DECISIONS.md    ./DECISIONS.md
-cp templates/ASSUMPTIONS.md  ./ASSUMPTIONS.md
-cp templates/SELF_REVIEW.md  ./SELF_REVIEW.md
-cp templates/TOOLS_USED.md   ./TOOLS_USED.md
+make setup
 ```
 
 ---
 
-## 5. Las 4 partes — resumen ejecutivo
+## 3. Estructura del ZIP entregado
 
-> Detalle completo en `STATEMENT.md`. **No empieces a codear sin leerlo.**
+El ZIP final sigue la estructura pedida en el enunciado y contiene únicamente los archivos obligatorios, el código, los tests y los outputs generados:
 
-| Parte | Entregable | Pts | Foco |
-|---|---|---:|---|
-| 1 · Pandas + EDA | `src/parte1_pandas.py` | 17 | Calidad de datos, vectorización |
-| 2 · SQL | `src/parte2_sql.sql` | 11 | Window functions, partition pruning |
-| 3 · ML | `src/parte3_modeling.ipynb` | 18 | Anti-leakage, métricas, interpretabilidad |
-| 4 · FastAPI + Agno | `src/parte4_api/` (debe arrancar con `uvicorn src.parte4_api.main:app`) | 18 | uvicorn + ASGI, Pydantic v2, agente Agno + tools, guardrails |
+```text
+FornesReynes_JosepGabriel_TakeHome.zip
+├── README.md
+├── DECISIONS.md
+├── ASSUMPTIONS.md
+├── SELF_REVIEW.md
+├── TOOLS_USED.md
+├── .git/
+├── pyproject.toml
+├── src/
+├── tests/
+├── outputs/
+└── notebooks/
+```
 
-Más: `DECISIONS.md` (**22**) · `SELF_REVIEW.md`+`ASSUMPTIONS.md` (**14**).
-**Total 100 · Aprobado ≥ 60 · Excelencia ≥ 80.**
+Contenido principal:
+
+* `README.md`: instrucciones para arrancar y evaluar esta solución.
+* `DECISIONS.md`: decisiones técnicas, trade-offs y criterios usados.
+* `ASSUMPTIONS.md`: supuestos adoptados ante ambigüedades del enunciado o del dataset.
+* `SELF_REVIEW.md`: revisión crítica de limitaciones, problemas detectados y mejoras futuras.
+* `TOOLS_USED.md`: herramientas, LLMs, librerías y documentación consultada.
+* `.git/`: historial completo del trabajo.
+* `pyproject.toml`: dependencias y configuración del proyecto.
+* `src/`: código fuente de las cuatro partes.
+* `tests/`: tests añadidos para validar la solución.
+* `outputs/`: CSVs, JSONs, modelo y figuras generadas por el código.
+* `notebooks`: notebooks usados como apoyo de análisis y explicación.
+
+No se incluyen `.venv/`, `.idea/`, caches, `data/transactions_sample.csv`, `data/_generator.py` ni `templates/`, siguiendo las instrucciones de entrega.
+
 ---
 
-## 6. Reglas del juego (lo esencial)
+## 4. Ejecutar tests
 
-✅ **Permitido**: cualquier LLM (ChatGPT, Claude, Copilot, Cursor, Windsurf), Stack Overflow, docs oficiales. Declara qué usaste en `TOOLS_USED.md` y para qué.
+Suite completa:
 
-🚫 **No permitido**: que otra persona haga el test por ti (lo detectamos en la entrevista posterior); copiar de otro candidato; manipular fechas/commits.
-
-⚠️ **Lo que medimos** es si entiendes lo que has escrito. Los documentos de criterio (`DECISIONS.md`, `SELF_REVIEW.md`, `ASSUMPTIONS.md`) y el commit history son la prueba escrita.
-
-**LLM provider para Parte 4** — 3 opciones válidas:
-1. Tu propia clave OpenAI (≤ 0,50 € coste real).
-2. `export MOCK_LLM=1` — agente determinístico, no penaliza.
-
-## 7. Entrega
-
-### Estructura final del `.zip`
-
-Cuando termines, tu `.zip` debe contener exactamente:
-
-```
-Apellido_Nombre_TakeHome.zip
-├── README.md              ← reemplaza este: cómo arrancar TU solución
-├── DECISIONS.md           ← obligatorio
-├── ASSUMPTIONS.md         ← obligatorio
-├── SELF_REVIEW.md         ← obligatorio
-├── TOOLS_USED.md          ← obligatorio
-├── .git/                  ← historial completo · NO BORRAR
-├── pyproject.toml         ← actualizado si añadiste deps (con versión fijada)
-├── src/                   ← tu código
-├── tests/                 ← tus tests
-└── outputs/               ← CSVs/JSONs generados por tu código
+```bash
+MOCK_LLM=1 uv run pytest -v
 ```
 
-**Archivo obligatorio faltante:** −5 pts cada uno.
+Atajo equivalente:
 
-### Comando recomendado para empaquetar
+```bash
+make test
+```
+
+Tests de la API:
+
+```bash
+MOCK_LLM=1 uv run pytest -v tests/test_api.py
+```
+
+Atajo:
+
+```bash
+make test-api
+```
+
+Los tests de la API fuerzan `MOCK_LLM=1`, por lo que no requieren `OPENAI_API_KEY`.
+
+---
+
+## 5. Parte 1 · Pandas + EDA
+
+Archivo principal:
+
+```text
+src/parte1_pandas.py
+```
+
+Funciones implementadas:
+
+- `load_clean(path)`
+- `monthly_kpis(df)`
+- `quality_report(df)`
+- `merchants_at_risk(df, top_n=200)`
+
+Para regenerar outputs de Parte 1:
+
+```bash
+uv run python -m src.parte1_pandas data/transactions_sample.csv
+```
+
+Esto genera o actualiza:
+
+```text
+outputs/monthly_kpis.csv
+outputs/quality_report.json
+outputs/merchants_at_risk.csv
+outputs/merchants_at_risk_eval.json
+```
+
+Decisiones relevantes:
+
+- Parseo explícito de importes en formato local con punto de miles y coma decimal.
+- Fechas mixtas tratadas con parser controlado.
+- Conservación de columnas `*_raw` para trazabilidad.
+- Deduplicación por columnas de negocio normalizadas, no solo por `transaction_id`.
+- No se usa `fla_churn90`, `cancellation_reason` ni información posterior a `reference_date` para construir señales predictivas.
+
+La heurística de `merchants_at_risk` se documenta como señal exploratoria, no como predictor validado de producción.
+
+---
+
+## 6. Parte 2 · SQL
+
+Archivo:
+
+```text
+src/parte2_sql.sql
+```
+
+Incluye las queries pedidas en el enunciado para:
+
+- KPIs agregados por merchant/mes.
+- Métricas de churn por snapshot.
+- Ranking de merchants y ventanas temporales.
+- Consideraciones de particionado y filtro temporal.
+
+Decisiones principales:
+
+- Uso de `transaction_date` como fecha de negocio.
+- Uso de intervalos semiabiertos, por ejemplo `[2025-07-01, 2025-10-01)`, para evitar errores con timestamps.
+- `reference_date = DATE '2025-09-30'` como snapshot de churn.
+- TPV definido como suma de `amount` solo en transacciones `approved`.
+
+---
+
+## 7. Parte 3 · Modelo de churn
+
+Notebook:
+
+```text
+src/parte3_modeling.ipynb
+```
+
+Artefactos principales:
+
+```text
+outputs/model.pkl
+outputs/model_card.md
+outputs/model_metrics.json
+outputs/feature_importance.csv
+outputs/feature_importance.png
+outputs/calibration_curve.png
+outputs/local_shap_explanation.csv
+outputs/local_shap_waterfall.png
+outputs/local_shap_false_positive_explanation.csv
+outputs/local_shap_false_positive_waterfall.png
+outputs/sanity_check_no_complaint_metrics.json
+```
+
+Resumen de enfoque:
+
+- Dataset de modelado a nivel merchant.
+- Exclusión de columnas con riesgo de leakage: `cancellation_reason`, `fla_churn90`, `reference_date`, `dat_process`, identificadores y columnas raw.
+- Features temporales construidas solo con información disponible hasta `reference_date`.
+- Comparación entre baseline, Logistic Regression y XGBoost.
+- Métricas enfocadas en clasificación desbalanceada: ROC-AUC, Average Precision / PR-AUC, Brier score y precision/recall@k.
+- Interpretabilidad con SHAP global y local.
+- Sanity check eliminando features de reclamos.
+
+Limitación importante: la validación no es out-of-time real porque el dataset parece centrado en un snapshot principal. Por tanto, el modelo debe interpretarse como ranking de riesgo experimental, no como probabilidad calibrada lista para producción.
+
+---
+
+## 8. Parte 4 · API FastAPI + Agno
+
+Directorio:
+
+```text
+src/parte4_api/
+```
+
+### 8.1 Arranque en modo mock, reproducible y sin coste
+
+```bash
+MOCK_LLM=1 uv run uvicorn src.parte4_api.main:app --reload --port 8000
+```
+
+Atajo:
+
+```bash
+make run
+```
+
+### 8.2 Arranque con OpenAI
+
+```bash
+export OPENAI_API_KEY="sk-..."
+export OPENAI_MODEL="gpt-4o-mini"
+uv run uvicorn src.parte4_api.main:app --reload --port 8000
+```
+
+La integración real con Agno/OpenAI está implementada, pero la validación reproducible de esta entrega se hizo con `MOCK_LLM=1` para evitar dependencia de proveedor externo.
+
+### 8.3 Health check
+
+```bash
+curl -s http://localhost:8000/health
+```
+
+Respuesta esperada:
+
+```json
+{
+  "status": "ok",
+  "model": "mock",
+  "version": "0.1.0"
+}
+```
+
+### 8.4 Clasificación individual
+
+```bash
+curl -s -X POST http://localhost:8000/classify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "merchant_id": 10063716,
+    "email_text": "Llevo 3 días sin poder cobrar con el POS. Voy a cancelar la cuenta.",
+    "locale": "es"
+  }'
+```
+
+Respuesta ejemplo:
+
+```json
+{
+  "merchant_id": 10063716,
+  "category": "churn_threat",
+  "urgency": 5,
+  "requires_human_escalation": true,
+  "reasoning": "merchant mentions cancellation risk",
+  "merchant_context_used": true,
+  "latency_ms": 0
+}
+```
+
+### 8.5 Clasificación batch
+
+```bash
+curl -s -X POST http://localhost:8000/classify/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "items": [
+      {"merchant_id": 10063716, "email_text": "POS roto, no puedo cobrar", "locale": "es"},
+      {"merchant_id": 10063717, "email_text": "Factura incorrecta", "locale": "es"}
+    ]
+  }'
+```
+
+El batch acepta entre 1 y 50 items.
+
+### 8.6 Guardrails y tools
+
+Implementado en `src/parte4_api/agent.py`:
+
+- Detección básica de prompt injection antes de llamar al LLM.
+- Redacción básica de PII antes del LLM: email, teléfono y tarjeta.
+- Tool `get_merchant_context(merchant_id)`, usando `data/merchants_context.json`.
+- Tool `flag_for_human_review(merchant_id, reason)`, que escribe en `outputs/human_review_queue.jsonl`.
+- Escalado humano para urgencia alta, amenaza de churn, fraude, prompt injection o reclamaciones repetidas.
+
+Categorías válidas:
+
+```text
+technical_issue
+billing
+onboarding
+fraud
+churn_threat
+other
+```
+
+Urgencia válida: entero de `1` a `5`.
+
+---
+
+## 9. Variables de entorno
+
+| Variable | Uso | Valor recomendado para evaluación |
+|---|---|---|
+| `MOCK_LLM` | Activa agente determinístico sin llamadas externas | `1` |
+| `OPENAI_API_KEY` | API key para modo real con OpenAI | solo si se quiere probar modo real |
+| `OPENAI_MODEL` | Modelo usado por Agno/OpenAI | `gpt-4o-mini` |
+
+Para evaluación reproducible:
+
+```bash
+export MOCK_LLM=1
+```
+
+---
+
+## 10. Comandos útiles
+
+```bash
+make setup      # instala dependencias con uv
+make test       # ejecuta todos los tests con MOCK_LLM=1
+make test-api   # ejecuta solo tests de la API
+make run        # arranca la API en modo mock
+make lint       # ejecuta ruff
+make clean      # elimina caches, .venv y artefactos de build
+```
+
+Comandos equivalentes sin Makefile:
+
+```bash
+uv sync --extra dev
+MOCK_LLM=1 uv run pytest -v
+MOCK_LLM=1 uv run uvicorn src.parte4_api.main:app --reload --port 8000
+```
+
+---
+
+## 11. Validación realizada
+
+La validación reproducible de la entrega cubre:
+
+- Tests unitarios de Parte 1 con datos sintéticos.
+- Validación de errores de entrada y columnas obligatorias.
+- Tests de `/health`, `/classify` y `/classify/batch`.
+- Guardrail de prompt injection.
+- Redacción básica de PII.
+- Side-effect de escalado humano en `outputs/human_review_queue.jsonl`.
+- Límite de 50 elementos en batch.
+
+La API se valida en modo `MOCK_LLM=1`. Esto permite revisar contrato, endpoints, schemas y side-effects sin depender de una API key externa.
+
+---
+
+## 12. Limitaciones conocidas
+
+Las principales limitaciones están detalladas en `SELF_REVIEW.md`. Las más importantes son:
+
+1. La heurística de merchants en riesgo no mejora claramente la tasa base de churn, por lo que no debe usarse como predictor validado.
+2. La validación del modelo de churn no es out-of-time real.
+3. El modelo debe interpretarse como ranking, no como probabilidad calibrada.
+4. La integración real Agno/OpenAI no fue validada con tráfico real ni golden set etiquetado.
+5. La redacción de PII es básica y debería ampliarse antes de producción.
+6. La cola JSONL de revisión humana es suficiente para el take-home, pero no es una cola robusta de producción.
+
+---
+
+## 13. Empaquetado recomendado para entrega
+
+Antes de crear el ZIP, limpiar caches y entorno virtual:
+
+```bash
+rm -rf .venv .pytest_cache .ruff_cache **/__pycache__ build dist *.egg-info
+```
+
+Comprobar estado de Git:
+
+```bash
+git status
+```
+
+Crear ZIP final excluyendo entorno virtual, caches, CSV original y plantillas:
 
 ```bash
 # Excluye .venv, cache, el CSV original (ya lo tenemos) y el generador interno
@@ -171,45 +437,24 @@ zip -r Apellido_Nombre_TakeHome.zip . \
      "build/*" "dist/*" "*.egg-info/*"
 ```
 
-> **Nota:** mantén la estructura root (`src/`, `tests/`, `pyproject.toml`). Copia las plantillas de `templates/` a la raíz **antes** de comprimir (ver §4).
-
-
-
-## 8. Rúbrica resumida
-
-| Bloque | Pts |
-|---|---:|
-| `DECISIONS.md` | 22 |
-| `SELF_REVIEW.md` + `ASSUMPTIONS.md` | 14 |
-| Parte 1 · Pandas | 17 |
-| Parte 2 · SQL | 11 |
-| Parte 3 · ML | 18 |
-| Parte 4 · API + Agno | 18 |
 ---
 
-## 9. FAQ rápida
+# `notebooks/`
 
-- **¿Cuánto tiempo real?** 6–8 h efectivas. Si te lleva 20 h, estás sobre-ingenierizando.
-- **¿Si no termino?** Mejor 3 partes bien que 5 a medias. Prioriza Parte 1 y Parte 4.
-- **¿Otra librería en vez de Agno?** Está permitido pero tienes que justificar el motivo y modificar el código.
-- **¿Deploy en cloud?** No. Tiene que arrancar local con `uvicorn`.
+Esta carpeta contiene notebooks usados como apoyo de análisis y explicación.
 
---
+## `parte1_eda.ipynb`
 
-## 10. Una última cosa
+Notebook exploratorio usado antes de implementar `src/parte1_pandas.py`. Sirve para revisar formatos, nulos, duplicados, valores categóricos, posibles leakage y patrones temporales.
 
-No buscamos código perfecto. Buscamos a alguien que:
-
-- **Lee los datos antes de modelarlos.**
-- **Pregunta lo que no entiende** (en `ASSUMPTIONS.md`).
-- **Defiende lo que escribió** (por escrito ahora, en directo en la entrevista después).
-- **Reconoce lo que no sabe** sin inventar respuestas.
-- **Documenta sus decisiones** como si otra persona fuera a mantener el código mañana.
-
-**Mucha suerte.** Estamos del otro lado leyéndote con curiosidad genuina.
-
-— El equipo del Getnet AI Lab
+No es la fuente productiva de limpieza, la lógica reproducible vive en `src/parte1_pandas.py`.
 
 ---
 
-*Versión 1.0 · Mayo 2026 · Distribución restringida a candidatos del Graduate Program AI Lab Getnet.*
+## 14. Notas de lectura para el evaluador
+
+- `DECISIONS.md` explica el razonamiento técnico, trade-offs, leakage, métricas y decisiones de API/agente.
+- `ASSUMPTIONS.md` enumera ambigüedades del enunciado y supuestos adoptados.
+- `SELF_REVIEW.md` recoge errores propios, limitaciones y cómo los mitigaría antes de producción.
+- `TOOLS_USED.md` declara el uso de herramientas externas/LLMs.
+- `src/parte4_api/README.md` contiene una explicación más específica de la API.

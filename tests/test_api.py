@@ -23,7 +23,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 # Forzamos MOCK_LLM antes de importar la app, por si lee el env en import time.
-os.environ.setdefault("MOCK_LLM", "1")
+os.environ["MOCK_LLM"] = "1"
 
 from src.parte4_api.agent import OUTPUTS_DIR, redact_pii  # noqa: E402
 from src.parte4_api.main import app  # noqa: E402
@@ -111,8 +111,25 @@ def test_batch_concurrency(client: TestClient) -> None:
     r = client.post("/classify/batch", json={"items": items})
     assert r.status_code == 200, r.text
     body = r.json()
-    assert len(body["results"]) + body["n_failed"] == 10
+    assert body["n_failed"] == 0
+    assert len(body["results"]) == 10
     assert body["total_latency_ms"] >= 0
+
+    valid_categories = {
+        "technical_issue",
+        "billing",
+        "onboarding",
+        "fraud",
+        "churn_threat",
+        "other",
+    }
+
+    for result in body["results"]:
+        assert result["category"] in valid_categories
+        assert 1 <= result["urgency"] <= 5
+        assert isinstance(result["requires_human_escalation"], bool)
+        assert len(result["reasoning"]) <= 300
+        assert result["latency_ms"] >= 0
 
 def test_redact_pii() -> None:
     text = "Mi email es test@example.com, mi teléfono +34 612 345 678 y tarjeta 4111 1111 1111 1111"

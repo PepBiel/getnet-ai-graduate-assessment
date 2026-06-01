@@ -12,7 +12,7 @@ parte4_api/
 └── README.md      ← este archivo
 ```
 
-## Cómo arrancar (el evaluador ejecutará exactamente esto)
+## Cómo arrancar
 
 ```bash
 # Opción A · con clave OpenAI propia

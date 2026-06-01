@@ -1,221 +1,153 @@
 # DECISIONS.md
 
-Documento vivo de decisiones tecnicas. Cada seccion se ira ampliando conforme avance la solucion.
+---
 
-## Parte 1 - Pandas
+## Parte 1 · Pandas
 
-### D1 - Exploracion antes de limpiar
+### D1 · Tratamiento de tipos en `load_clean`
 
-- **Que hice**: cree un notebook de exploracion para visualizar formatos, nulos, duplicados y patrones temporales antes de implementar la limpieza reproducible en `src/parte1_pandas.py`.
-- **Por que**: limpiar directamente sin mirar los datos puede ocultar problemas de calidad o introducir supuestos no defendibles. La exploracion separa observacion de datos y transformacion productiva.
-- **Que descarte**: modificar el CSV original o limpiar de forma manual desde el notebook. El notebook queda como apoyo de EDA; la logica reutilizable vive en funciones.
-- **Que supuse**: el CSV de entrada debe tratarse como read-only y cualquier transformacion debe ser reproducible desde codigo.
+- **Qué hice**: parseé `amount` desde formato local con punto de miles y coma decimal. Además, parseé `transaction_date`, `reference_date`, `last_complaint_date` y `dat_process`. Finalmente, normalicé `status` y `channel`, y traté `mcc` como string/categoría.
+- **Por qué**: esos campos no eran analizables de forma segura como strings originales. En particular, `amount` no podía convertirse con `astype(float)` sin tratar separadores locales, y `mcc` representa un código de categoría, no una magnitud numérica continua.
+- **Qué descarté**: confiar en inferencia automática de fechas, convertir importes directamente con `astype(float)`, sobrescribir los valores originales sin trazabilidad y tratar `mcc` como número continuo.
+- **Qué supuse**: los importes siguen la convención observada en el CSV (`.` como miles y `,` como decimal), y las fechas pueden aparecer en formato ISO o `DD/MM/YYYY`.
 
-### D2 - Tratamiento de tipos en `load_clean`
+### D2 · Estrategia de trazabilidad y deduplicación
 
-- **Que hice**: parseo `amount` desde formato con coma decimal, parseo `transaction_date`, `reference_date`, `last_complaint_date` y `dat_process`, normalizo `status` y `channel`, y trato `mcc` como string.
-- **Por que**: esos campos no son analizables de forma segura como strings originales. `mcc` es un codigo de categoria, no una magnitud numerica.
-- **Que descarte**: usar `astype(float)` para importes, confiar en inferencia automatica de fechas o dejar `mcc` como entero.
-- **Que supuse**: los importes siguen convencion local con `.` como miles y `,` como decimal; las fechas observadas pueden venir en ISO o `DD/MM/YYYY`.
+- **Qué hice**: conservé columnas `*_raw` para los campos transformados y dedupliqué por columnas de negocio normalizadas, excluyendo `transaction_id` y columnas raw.
+- **Por qué**: mantener valores raw permite auditar errores de parseo y validar supuestos de formato. Deduplicar solo por `transaction_id` no detectaría reenvíos de POS donde el identificador cambia, pero el evento de negocio es el mismo.
+- **Qué descarté**: modificar el CSV original, eliminar columnas raw después de limpiar, deduplicar solo por `transaction_id` y eliminar duplicados antes de normalizar tipos.
+- **Qué supuse**: si todas las columnas de negocio normalizadas coinciden, conservar la primera fila es suficiente para los KPIs y análisis de esta prueba.
 
-### D3 - Trazabilidad y no sobrelimpieza
+### D3 · KPIs mensuales y definiciones de negocio
 
-- **Qué hice**: conservé columnas `*_raw` para los campos que iban a ser transformados (`amount`, `transaction_date`, `reference_date`, `last_complaint_date`, `dat_process`). Después parseé las versiones limpias, pero mantuve las originales para trazabilidad, auditoría y posibles análisis posteriores.
-- **Por qué**: `load_clean` debe producir un dataset limpio y auditable para análisis general. Mantener las columnas originales permite revisar errores de parseo, validar supuestos de formato y reutilizar la información raw si en partes posteriores se necesita otro tratamiento.
-- **Qué descarté**: sobrescribir sin trazabilidad los valores originales, filtrar globalmente todo lo posterior a `reference_date`, imputar importes nulos o eliminar variables sospechosas durante la carga.
-- **Qué supuse**: algunas transacciones posteriores a `reference_date` pueden servir para EDA, validaciones o controles de calidad, aunque no deben usarse para features predictivas.
-- **Trade-off**: conservar columnas `*_raw` aumenta ligeramente el tamaño del DataFrame, pero mejora la auditabilidad y evita perder información útil para debugging, `quality_report` o ejercicios posteriores.
+- **Qué hice**: calculé KPIs mensuales a nivel `merchant_id` × `month`, usando `transaction_date` para derivar el mes calendario. Definí `tpv` como suma de `amount` en transacciones `approved`, `approval_rate` como aprobadas / totales, `pct_ecom` como TPV aprobado de canal `ecom` / TPV aprobado total y `n_tx` como número total de transacciones.
+- **Por qué**: TPV representa volumen de pagos procesado con éxito, por lo que las transacciones denegadas o reversadas no deberían sumar volumen. En cambio, `n_tx` mide actividad o intentos, así que incluye todos los estados.
+- **Qué descarté**: incluir transacciones denegadas/reversadas en TPV, calcular `pct_ecom` por conteo de transacciones, filtrar globalmente por `reference_date` dentro de una función general de KPIs y eliminar outliers durante la agregación mensual.
+- **Qué supuse**: `transaction_date` es la fecha de negocio para reporting mensual y `pct_ecom` debe leerse como mix de volumen, no como mix de operaciones.
 
-### D4 - Deduplicacion por negocio
+### D4 · Reporte de calidad de datos
 
-- **Que hice**: deduplique por columnas de negocio excluyendo `transaction_id` y columnas `*_raw`.
-- **Por que**: `transaction_id` puede ser unico aunque dos filas representen el mismo evento de negocio. Excluir columnas raw evita que un mismo evento no se detecte como duplicado solo por diferencias de formato ya normalizadas.
-- **Que descarte**: deduplicar solo por `transaction_id` o eliminar duplicados antes de parsear tipos.
-- **Que supuse**: si todas las columnas de negocio normalizadas coinciden, conservar la primera fila es suficiente para KPIs de esta prueba.
+- **Qué hice**: implementé `quality_report` como reporte estructurado con problemas detectados, filas afectadas, impacto y propuesta de corrección. Incluí missing values, fallos de parseo, formatos mixtos, outliers, duplicados de negocio, inconsistencias temporales, leakage potencial y valores categóricos inesperados.
+- **Por qué**: el objetivo no era solo limpiar, sino dejar evidencia de riesgos para que otra persona pueda mantener o auditar el pipeline. Algunos problemas son warnings para modelado, no errores que deban eliminarse automáticamente.
+- **Qué descarté**: corregir automáticamente todos los problemas, imputar importes nulos, eliminar outliers sin reglas de negocio y borrar columnas sospechosas durante la carga.
+- **Qué supuse**: `quality_report` debe auditar y comunicar riesgos, no modificar el DataFrame. La decisión de corregir o eliminar depende del uso posterior.
 
-### D5 - Definiciones de KPIs mensuales
+### D5 · Heurística de `merchants_at_risk`
 
-- **Que hice**: calcule KPIs mensuales a nivel `merchant_id` x `month`, usando `transaction_date` para derivar el mes calendario.
-- **Definiciones**: `tpv` es la suma de `amount` para transacciones con `status = approved`; `approval_rate` es transacciones aprobadas dividido por transacciones totales; `pct_ecom` es TPV aprobado de canal `ecom` dividido por TPV aprobado total; `n_tx` es el numero total de transacciones del merchant-mes.
-- **Por que**: TPV representa volumen de pagos procesado con exito, por lo que las transacciones denegadas o reversadas no contribuyen al volumen. En cambio, `n_tx` incluye todos los estados porque mide actividad e intentos, no solo pagos exitosos.
-- **Que descarte**: contar `pct_ecom` por numero de transacciones, incluir denegadas/reversadas en TPV, filtrar por `reference_date` dentro de una funcion general de agregacion o eliminar outliers durante el calculo mensual.
-- **Trade-off**: los importes faltantes en transacciones aprobadas no se imputan, asi que el TPV puede quedar subestimado en merchant-meses afectados. Prefiero dejar visible el problema para `quality_report` antes que inventar volumen.
+- **Qué hice**: implementé `merchants_at_risk` como una heurística vectorizada de señales débiles de pre-churn a nivel merchant. Usé caída reciente de TPV, caída de transacciones, caída de approval rate, tasa de estados negativos, días desde última transacción, inactividad relativa al ritmo histórico y reclamo reciente válido antes de `reference_date`.
+- **Por qué**: el enunciado pide una señal débil, no un modelo supervisado. Elegí señales interpretables que pueden explicarse a negocio como deterioro de uso, fricción operativa o menor actividad antes del snapshot.
+- **Qué descarté**: usar `fla_churn90`, `cancellation_reason`, transacciones posteriores a `reference_date`, reclamos posteriores a `reference_date` o una probabilidad calibrada sin validación. Esas variables o ventanas introducirían leakage o harían que la heurística dejara de ser una señal débil previa al churn.
+- **Qué supuse**: los últimos 3 meses calendario hasta `reference_date` son una ventana razonable para comparar contra los 3 meses anteriores. También supuse que la inactividad debe interpretarse de forma relativa al patrón histórico del merchant, no como una regla absoluta igual para todos.
+- **Limitación observada**: evalué descriptivamente el ranking usando `fla_churn90` solo como variable de comprobación posterior, no para construir la heurística. El objetivo era que el top 200 concentrara más merchants con `fla_churn90 = 1` que la población general. Sin embargo, la `Precision@200` fue aproximadamente 8,5%, frente a una tasa global de churn de aproximadamente 8,7%, por lo que el ranking no mostró lift positivo frente a la tasa base. Por tanto, mantengo la heurística como ranking explicable para exploración, no como predictor validado.
 
-### D6 - Reporte de calidad de datos
+---
 
-- **Qué hice**: implementé `quality_report` como un reporte estructurado con problemas detectados, filas afectadas, impacto y propuesta de corrección.
-- **Por qué**: el objetivo no es solo limpiar datos, sino dejar evidencia de los riesgos encontrados para que otra persona pueda mantener o auditar el pipeline.
-- **Qué incluí**: importes missing, importes missing en transacciones aprobadas, fallos de parseo, formatos mixtos, importes extremos para revisión, duplicados de negocio, inconsistencias temporales respecto a `reference_date`, riesgo de leakage en `cancellation_reason`, presencia de `cancellation_reason` en transacciones aprobadas, target desbalanceado y valores categóricos inesperados.
-- **Qué descarté**: no traté todos los problemas como errores a eliminar. Algunos, como outliers o transacciones posteriores a `reference_date`, se reportan para que el tratamiento dependa del uso posterior.
-- **Trade-off**: el reporte es conservador y puede marcar situaciones que son válidas para análisis descriptivo, pero no seguras para modelado predictivo. Prefiero explicitar estos riesgos antes que ocultarlos durante la limpieza.
-- **Summary adicional**: añadí métricas de contexto como número de merchants, tasa positiva del target a nivel fila y merchant, consistencia del target por merchant y percentiles/resumen de importes para facilitar la revisión posterior.
+## Parte 2 · SQL
 
-### D7 - Heurística de `merchants_at_risk`
+### D6 · Lectura del modelo de datos del warehouse
 
-- **Qué hice**: implementé `merchants_at_risk` como una heurística vectorizada de señales débiles de pre-churn a nivel merchant.
-- **Señales usadas**: caída reciente de TPV, caída de número de transacciones, caída de approval rate, tasa reciente de transacciones `denied`/`reversed`, días desde la última transacción, inactividad relativa al ritmo histórico del merchant y reclamo reciente válido antes de `reference_date`.
-- **Por qué**: el enunciado pide una "señal débil" de pre-churn, no un modelo supervisado. Estas señales son interpretables y se pueden explicar a negocio como deterioro de uso, fricción operativa o falta de actividad antes del snapshot.
-- **Ventanas temporales**: comparé los últimos 3 meses calendario hasta `reference_date` contra los 3 meses anteriores. Esta ventana es simple, interpretable y suficiente para una heurística inicial, aunque debería validarse con negocio si se usara fuera del contexto del take-home.
-- **Puntuación**: usé una puntuación ponderada: 35 puntos para caída de TPV, 20 para caída de transacciones, 15 para caída de approval rate, 10 para tasa de estados negativos, 10 para inactividad y 10 para reclamo reciente. El score es relativo e interpretable, no una probabilidad calibrada.
-- **Qué descarté**: no usé `fla_churn90`, `cancellation_reason`, transacciones posteriores a `reference_date` ni reclamos posteriores a `reference_date`, porque introducirían leakage o información no disponible en el snapshot.
-- **Matiz de historial insuficiente**: si un merchant solo tiene transacciones posteriores a `reference_date`, no interpreto esa ausencia de histórico seguro como inactividad real. Lo trato como falta de historial observable antes del snapshot y no le asigno riesgo por inactividad salvo que existan otras señales válidas.
-- **Matiz de inactividad**: no comparo únicamente contra un umbral fijo de días sin transaccionar; también comparo `days_since_last_tx` con la mediana histórica de días entre transacciones del propio merchant. Esto evita penalizar injustamente a merchants que normalmente transaccionan con poca frecuencia.
-- **Uso de `fla_churn90`**: no usé `fla_churn90` para construir `risk_score`, seleccionar señales ni ordenar merchants. La heurística se basa únicamente en señales disponibles antes o en `reference_date`.
-- **Comparación posterior con el target**: comparé el top 200 contra `fla_churn90` solo como evaluación descriptiva posterior. Esta comparación ayuda a entender si el ranking captura más churners que la tasa base, pero no constituye una validación robusta porque se realiza sobre el mismo dataset de trabajo y no sobre un holdout temporal independiente.
-- **Interpretación del resultado**: el resultado descriptivo del top 200 no mejora claramente la tasa base de churn. Por tanto, considero esta heurística interpretable y útil para priorización exploratoria, pero no predictivamente validada.
-- **Trade-off**: el score no está calibrado ni validado contra outcomes externos; sirve para priorizar revisión humana o exploración inicial, no para automatizar decisiones comerciales.
+- **Qué hice**: antes de escribir SQL, interpreté el grano de `merchants`, `transactions` y `churn_labels` y definí las relaciones por `merchant_id`.
+- **Por qué**: evita joins que dupliquen filas y métricas calculadas a un nivel equivocado. `transactions` puede tener muchas filas por merchant, mientras que `churn_labels` debe filtrarse por snapshot.
+- **Qué descarté**: unir tablas y agregar sin revisar grano, usar `dat_process` como fecha de negocio y tratar `fla_churn90` como feature.
+- **Qué supuse**: `merchants` tiene una fila por merchant, `transactions` una fila por transacción y `churn_labels` una fila por merchant y `reference_date`.
 
+### D7 · Decisiones específicas de las queries SQL
 
-## Parte 2 - SQL
+- **Qué hice**: escribí las queries usando `transaction_date` como fecha de negocio, TPV aprobado como definición de volumen y `reference_date = DATE '2025-09-30'` para churn rate. Para Q3 2025 usé el intervalo semiabierto `[2025-07-01, 2025-10-01)`.
+- **Por qué**: los intervalos semiabiertos evitan errores si `transaction_date` contiene timestamps. Mantener la misma definición de TPV que en Parte 1 evita inconsistencias entre Pandas y SQL.
+- **Qué descarté**: usar `BETWEEN` para Q3, usar `dat_process` como fecha principal de negocio, deduplicar agresivamente sin evidencia de duplicados en el esquema lógico y mezclar snapshots de churn.
+- **Qué supuse**: `country = 'BR'` identifica merchants brasileños y `amount` ya es numérico en warehouse.
 
-### D8 - Lectura del modelo de datos del warehouse
+---
 
-- **Qué hice**: antes de escribir las queries, interpreté el significado, grano y uso esperado de cada tabla (`merchants`, `transactions`, `churn_labels`). El objetivo fue evitar joins incorrectos, duplicaciones accidentales y agregaciones a un nivel equivocado.
+## Parte 3 · Modelado ML
 
-- **Grano asumido**:
-  - `merchants`: una fila por merchant.
-  - `transactions`: una fila por transacción.
-  - `churn_labels`: una fila por merchant y `reference_date`.
+### D8 · Features descartadas (incluye trampas detectadas)
 
-- **Relaciones**:
-  - `merchants` se une con `transactions` por `merchant_id`.
-  - `merchants` se une con `churn_labels` por `merchant_id`.
-  - `transactions` puede tener muchas filas por merchant, por lo que cualquier métrica transaccional debe agregarse antes de interpretarse a nivel merchant.
-  - `churn_labels` puede contener distintos snapshots para un mismo merchant, por lo que siempre filtro por `reference_date` cuando calculo churn.
+- **Qué hice**: construí el dataset de modelado a nivel merchant y descarté `cancellation_reason`, `last_complaint_date` directa, `merchant_id`, `transaction_id`, `fla_churn90`, `reference_date`, `dat_process` y columnas `*_raw` como features.
+- **Por qué**: `cancellation_reason` parece información post-evento, `last_complaint_date` puede contener información posterior al snapshot, los IDs pueden inducir memorización, `dat_process` es operativo y las columnas raw son trazabilidad, no señal predictiva.
+- **Qué descarté**: entrenar directamente sobre filas transaccionales, usar identificadores, usar columnas sospechosas por su alta correlación con el target o introducir información posterior al snapshot.
+- **Qué supuse**: `fla_churn90` es una etiqueta a nivel merchant/snapshot, por lo que el modelo debe entrenarse a nivel merchant con agregados temporales seguros.
 
-- **Supuestos sobre campos**:
-  - `transaction_date` es la fecha de negocio para trimestres, meses y comparativas temporales.
-  - `dat_process` es fecha de procesamiento/partición y puede usarse para optimización, pero no como sustituto de la fecha de negocio.
-  - `amount` se asume numérico en warehouse. Si viniera como string con formato local, habría que parsearlo antes de calcular TPV.
-  - `status = 'approved'` representa transacción aprobada y es el estado que contribuye a TPV.
-  - `country = 'BR'` identifica merchants brasileños.
-  - `mcc` es categórico aunque pueda estar codificado como número.
-  - `fla_churn90` es una etiqueta a nivel merchant-snapshot, no una feature predictiva.
-
-- **Decisiones derivadas de este análisis**:
-  - Las métricas de TPV y approval rate se calculan desde `transactions`.
-  - Las métricas de churn se calculan a nivel merchant usando `churn_labels`.
-  - Para evitar mezclar snapshots, las consultas de churn filtran explícitamente `reference_date = DATE '2025-09-30'`.
-  - En las comparativas temporales uso `transaction_date`, manteniendo `dat_process` solo como posible ayuda de particionado/pruning.
-
-- **Riesgo si el supuesto es falso**: si `merchants` o `churn_labels` tienen duplicados no controlados, los joins pueden duplicar filas y alterar TPV, approval rate o churn rate. Si `transaction_date` y `dat_process` representan lógicas temporales distintas, usar la fecha incorrecta podría asignar transacciones al periodo equivocado.
-
-### D9 - Decisiones específicas de las queries SQL
-
-- **Q1**: interpreté Q3 2025 como el intervalo semiabierto `[2025-07-01, 2025-10-01)`. Preferí esta forma frente a `BETWEEN` para evitar ambigüedades si `transaction_date` contiene timestamp.
-- **Q1**: calculé TPV aprobado como suma de `amount` solo cuando `status = 'approved'`, manteniendo la definición usada en Parte 1.
-- **Q1**: calculé `approval_rate` como transacciones aprobadas dividido por total de transacciones del periodo.
-- **Q2**: calculé churn rate a nivel merchant, no a nivel transacción. Usé una CTE intermedia (`churn_by_segment`) para separar el cálculo de conteos del filtro `n_merchants >= 100`.
-- **Q3**: agregué TPV mensual por merchant y después hice un self-join contra el mismo mes del año anterior usando `ADD_MONTHS(month, -12)`.
-- **Q3**: si no existe TPV para el mismo mes de 2024, devuelvo `0` con `COALESCE`, interpretándolo como ausencia de volumen observado ese mes.
-- **Q4**: expliqué `dat_process` como una columna útil para partition pruning, pero manteniendo `transaction_date` como fecha de negocio.
-- **Trade-off**: no añadí lógica extra de deduplicación o normalización avanzada en las queries porque el enunciado presenta un esquema lógico de warehouse. Si los datos reales tuvieran duplicados o valores no normalizados, añadiría CTEs previas de validación/limpieza.
-
-
-## Parte 3 - Modelado ML
-
-### D10 - Grano del dataset de modelado
-
-- **Qué hice**: construí un dataset de modelado a nivel merchant, agregando transacciones en features de comportamiento antes de entrenar.
-- **Por qué**: `fla_churn90` es una etiqueta de churn a nivel merchant/snapshot, no a nivel transacción individual. Entrenar a nivel transacción haría que merchants con más transacciones pesaran más y podría distorsionar la evaluación.
-- **Qué descarté**: no entrené directamente sobre filas transaccionales.
-- **Qué supuse**: cada merchant tiene una única etiqueta válida para el snapshot de análisis.
-
-### D11 - Features descartadas por leakage o baja generalización
-
-- **Qué hice**: descarté `cancellation_reason`, `last_complaint_date` directa, `merchant_id`, `transaction_id`, `fla_churn90`, `reference_date`, `dat_process` y columnas `*_raw`.
-- **Por qué**: `cancellation_reason` parece información post-evento; `last_complaint_date` puede contener información posterior al snapshot; los IDs pueden inducir memorización; `dat_process` es operativo; las columnas raw son de trazabilidad.
-- **Qué usé en su lugar**: agregados seguros hasta `reference_date`, como TPV reciente, caída de TPV, approval rate, fricción operativa, canal, cadencia de transacción y reclamos seguros.
-- **Riesgo si me equivoco**: podría estar descartando una señal útil si estuviera disponible antes del snapshot, pero prefiero evitar leakage no justificado.
-
-### D12 - Análisis de correlación entre features
-
-- **Qué hice**: después de construir features seguras a nivel merchant, revisé la correlación Spearman entre variables numéricas para detectar redundancias fuertes.
-- **Por qué**: algunas métricas de volumen, actividad y ratios pueden estar relacionadas. Revisar correlaciones ayuda a evitar features duplicadas y a interpretar mejor los modelos, especialmente el baseline lineal.
-- **Qué no hice**: no usé correlación para decidir si una variable con posible leakage debía conservarse. Las columnas sospechosas se descartan por disponibilidad temporal y lógica de negocio, no por su correlación.
-- **Decisión**: no eliminé automáticamente todas las variables correlacionadas. Mantuve features interpretables cuando representaban señales de negocio distintas.
-- **Trade-off**: mantener features correlacionadas puede repartir importancia entre variables similares, especialmente en modelos de árboles.
-
-### D13 - Split y evaluación del modelo
+### D9 · Split temporal-aware y prevención de leakage
 
 - **Qué hice**: construí features usando solo información con fecha menor o igual a `reference_date` y después hice un split estratificado a nivel merchant.
-- **Por qué**: el target está desbalanceado y el dataset parece tener un snapshot principal, por lo que mantuve la proporción de churn en train/test sin mezclar información futura en las features.
-- **Limitación**: si solo hay un snapshot, este split no es una validación temporal out-of-time real. Para producción, validaría en snapshots posteriores.
-- **Métricas**: usé ROC-AUC, PR-AUC / Average Precision, Brier score y precision/recall@k, evitando accuracy como métrica principal.
+- **Por qué**: el dataset parece tener un snapshot principal, por lo que no puedo hacer una validación out-of-time real. El corte temporal en features reduce leakage, y el split estratificado mantiene la proporción de churn.
+- **Qué descarté**: llamar a esto una validación temporal completa, usar un random split a nivel transacción o mezclar información futura en features.
+- **Qué supuse**: cada merchant tiene una etiqueta válida para el snapshot y, con los datos disponibles, la evaluación más honesta es un split estratificado con limitación explícita.
 
-### D14 - Modelos e interpretabilidad
+### D10 · Métricas y umbralización
 
-- **Qué hice**: entrené una Logistic Regression como baseline interpretable y un XGBoost como modelo no lineal más potente.
-- **Por qué**: la regresión logística sirve como referencia simple y XGBoost puede capturar interacciones no lineales en datos tabulares.
-- **Interpretabilidad**: usé SHAP para explicar el modelo final y obtener el top-5 de features por importancia media absoluta.
-- **Qué descarté**: no añadí LIME para evitar introducir una dependencia adicional. SHAP ya está disponible en el entorno y cubre el requisito de interpretabilidad global.
-- **Matiz**: la importancia de features indica asociación con la predicción, no causalidad.
+- **Qué hice**: evalué Logistic Regression y XGBoost con ROC-AUC, Average Precision / PR-AUC, Brier score y precision/recall@k. También comparé contra una baseline de tasa positiva y revisé calibración.
+- **Por qué**: el target está desbalanceado, por lo que accuracy puede ser engañosa. En churn, priorizar un top-k de merchants es más accionable que fijar solo un umbral genérico.
+- **Qué descarté**: usar accuracy como métrica principal, optimizar hiperparámetros agresivamente en un único snapshot y presentar probabilidades como calibradas sin validación.
+- **Qué supuse**: el uso más razonable del modelo en esta iteración es ranking de riesgo, no decisión automática ni probabilidad calibrada de churn.
 
-### D15 - Lectura de resultados y limitaciones del modelo
+### D11 · Interpretabilidad y lectura de resultados
 
-- **Qué observé**: los modelos muestran señal moderada, no una separación fuerte. El ROC-AUC está alrededor de 0.60–0.62 y la Average Precision mejora ligeramente la tasa base de churn.
-- **Por qué importa**: esto sugiere que las features construidas aportan algo de señal, pero el modelo no debe interpretarse como una solución predictiva robusta ni lista para producción.
-- **Calibración**: el Brier score indica que las probabilidades no están bien calibradas. Esto puede deberse al uso de `class_weight` y `scale_pos_weight`, que ayudan al ranking pero pueden distorsionar probabilidades.
-- **Interpretabilidad**: varias features importantes están relacionadas con reclamos seguros. Las mantengo porque aplican filtro temporal, pero las interpreto con cautela por los problemas de calidad detectados en `last_complaint_date`.
-- **Trade-off**: prioricé un pipeline reproducible y anti-leakage frente a optimizar métricas. No ajusté hiperparámetros agresivamente para evitar sobreoptimizar este único dataset.
+- **Qué hice**: usé SHAP para interpretar el modelo final global y localmente. Añadí top-5 features, true positive, false positive y sanity check sin features de reclamos.
+- **Por qué**: el enunciado pide interpretabilidad y era importante comprobar si el modelo dependía demasiado de variables sensibles como reclamos.
+- **Qué descarté**: añadir LIME como dependencia extra y sobreinterpretar SHAP como causalidad.
+- **Qué supuse**: SHAP es suficiente para explicar contribuciones globales y locales en esta entrega, siempre indicando que son asociaciones del modelo y no causalidad.
+- **Limitación observada**: los modelos muestran señal moderada, no una separación fuerte. La Average Precision mejora ligeramente la tasa base, pero no considero el modelo listo para producción.
 
+---
 
-## Parte 4 - FastAPI + Agno Agent
+## Parte 4 · FastAPI + Agno
 
-### D16 - Arquitectura de la API
+### D12 · Por qué Agno (vs. LangChain / LlamaIndex / código casero)
 
-- **Qué hice**: implementé una API FastAPI con tres endpoints: `/health`, `/classify` y `/classify/batch`.
-- **Por qué**: el enunciado pide una API funcional que pueda arrancar con `uvicorn` y devolver JSON real.
-- **Diseño**: separé `main.py` para endpoints/dependency injection, `agent.py` para agente/tools/guardrails y `schemas.py` para contratos Pydantic.
-- **Trade-off**: mantengo la lógica del endpoint sencilla y delego clasificación en un wrapper de agente con una interfaz común `.classify(...)`.
+- **Qué hice**: implementé una API FastAPI con un wrapper de agente que puede usar Agno/OpenAI o un `_MockAgent` determinístico con `MOCK_LLM=1`.
+- **Por qué**: el enunciado menciona Agno explícitamente y el caso de uso requiere un agente ligero con tools locales, instrucciones claras y salida estructurada. Agno encaja mejor que una arquitectura grande para esta prueba.
+- **Qué me gustó / no me gustó del framework**: me gustó que permite combinar tools e instrucciones en una estructura pequeña. Sinceramente, no hubo nada en especial que no me gustara.
+- **Qué descarté**: LangChain/LlamaIndex para este alcance, porque serían más útiles con RAG amplio, múltiples retrievers o workflows complejos. También descarté código casero puro porque el enunciado pedía explícitamente un agente Agno/OpenAI o mock.
 
-### D17 - Agno, OpenAI y modo mock
+### D13 · Modelo elegido + estimación de coste a 5.000 emails/día
 
-- **Qué hice**: implementé un agente Agno con OpenAIChat y un `_MockAgent` determinístico activado con `MOCK_LLM=1`.
-- **Por qué Agno**: elegí Agno porque el enunciado lo menciona explícitamente y porque permite construir un agente ligero con tools custom, instrucciones claras y salida estructurada. Para este alcance, Agno es suficiente y evita introducir una arquitectura más grande.
-- **Por qué no LangChain/LlamaIndex**: LangChain o LlamaIndex serían útiles en sistemas con cadenas complejas, RAG amplio, múltiples retrievers o workflows más elaborados. En esta prueba solo necesito clasificar emails, usar dos tools locales y devolver un schema Pydantic, por lo que preferí una solución más pequeña y directa.
-- **Modelo elegido**: dejé configurado `gpt-4o-mini` como modelo por defecto por ser un modelo de bajo coste y adecuado para clasificación estructurada de emails cortos.
-- **Validación realizada**: validé la Parte 4 en modo `MOCK_LLM=1`, no con una API key real de OpenAI. Por tanto, no afirmo haber medido calidad real, latencia real, coste real ni compatibilidad real del structured output con OpenAI.
-- **Limitación honesta**: la integración real con Agno/OpenAI queda implementada, pero debería probarse con una API key real antes de considerarla lista para producción.
-- **Trade-off**: el mock permite validar contrato, endpoints, guardrails, redacción de PII, batch y side-effects de forma reproducible y sin coste externo, pero no mide calidad semántica real del LLM.
+- **Modelo**: dejé configurado `gpt-4o-mini` como modelo por defecto de bajo coste para clasificación estructurada de emails cortos. La validación real con API key queda pendiente.
+- **Tokens medios por request** (input + output): no los medí con tráfico real. Para estimar, supongo 900 tokens de entrada por email entre instrucciones, contexto y email redactado, y 150 tokens de salida para la respuesta estructurada.
+- **Coste por request** (€): aproximación no medida. Tomando precios de modelo mini publicados en USD como referencia y un tipo de cambio aproximado, el orden de magnitud sería alrededor de `0,0012–0,0014 €` por email bajo esos supuestos.
+- **Coste mensual estimado** (€): `5.000 emails/día × 30 días = 150.000 emails/mes`. Con 900 input tokens y 150 output tokens por email: 135M input tokens y 22,5M output tokens al mes. Usando como referencia precios mini publicados de `$0.75 / 1M input tokens` y `$4.50 / 1M output tokens`, el coste base sería `$101,25 input + $101,25 output = $202,50/mes`, aproximadamente `185–205 €/mes` según tipo de cambio. Si se pudiera usar Batch API, podría reducirse aproximadamente a la mitad. Esta cifra es orientativa, no coste real medido.
 
-### D18 - Coste y medición pendiente
+### D14 · Diseño del schema Pydantic
 
-- **Qué pide el enunciado**: estimar el coste mensual procesando 5.000 emails/día.
-- **Qué puedo afirmar**: no ejecuté tráfico real contra OpenAI, por lo que no tengo una medición real de tokens por email ni de coste.
-- **Cómo lo estimaría correctamente**: antes de producción mediría tokens de entrada/salida en una muestra representativa de emails reales, multiplicaría por 5.000 emails/día y por 30 días, y aplicaría el precio vigente del modelo elegido.
-- **Fórmula**:
-  - `emails_mes = 5.000 × 30`
-  - `tokens_entrada_mes = emails_mes × tokens_entrada_promedio`
-  - `tokens_salida_mes = emails_mes × tokens_salida_promedio`
-  - `coste_mes = tokens_entrada_mes × precio_input + tokens_salida_mes × precio_output`
-- **Decisión**: no incluyo una cifra cerrada porque no he medido tokens reales ni he validado llamadas reales con API key. Prefiero documentar el método de estimación antes que inventar un coste aparentemente preciso.
+- **Qué hice**: definí esquemas Pydantic v2 para request/response y un enum cerrado de categorías: `technical_issue`, `billing`, `onboarding`, `fraud`, `churn_threat` y `other`.
+- **Por qué enum cerrado de categorías**: facilita routing operativo, métricas por categoría, tests reproducibles y dashboards. También reduce respuestas ambiguas del LLM.
+- **Por qué cap 300 chars en `reasoning`**: limita coste, evita respuestas largas innecesarias, reduce riesgo de exponer información sensible y fuerza explicaciones operativas breves.
+- **Qué descarté**: texto libre como salida principal y categorías abiertas generadas por el LLM. También descarté reasoning largo en la respuesta pública. Para auditoría profunda usaría trazas internas separadas.
 
-### D19 - Schema Pydantic y structured output
+### D15 · Estrategia de evaluación antes de producción
 
-- **Qué hice**: usé schemas Pydantic v2 para request/response y un enum cerrado de categorías.
-- **Por qué**: el contrato estricto reduce respuestas ambiguas del LLM y hace que los consumidores de la API reciban JSON validado.
-- **Trade-off**: un enum cerrado puede forzar algunos casos ambiguos a `other`, pero facilita métricas, dashboards y routing operativo.
-- **Reasoning**: limité `reasoning` a 300 caracteres para evitar respuestas largas, exposición innecesaria de datos y costes de downstream.
+- **Qué hice / propondría**: validé técnicamente el flujo con `MOCK_LLM=1`. Antes de producción construiría una evaluación real con API key, datos representativos y revisión humana.
+- **Golden set**: lo construiría con soporte/operaciones, incluyendo emails reales o anonimizados por categoría, idioma, urgencia, segmento y casos críticos.
+- **LLM-as-judge**: lo usaría solo como apoyo para revisar consistencia de explicaciones o encontrar discrepancias, no como sustituto del golden set humano.
+- **Métricas clave**: precision/recall/F1 por categoría, recall de urgencias 4-5, falsos negativos críticos, tasa de escalado humano, latencia p50/p95, tasa de error y coste por 1.000 emails.
+- **Qué supuse**: no basta con que pasen tests técnicos, sinó que el modo real debe demostrar calidad, coste y latencia aceptables antes de producción.
 
-### D20 - Guardrails, PII y escalado humano
+### D16 · Mitigación cuando el LLM falla (urgencia 5 clasificada como 2)
 
-- **Qué hice**: detecto prompt injection antes del LLM, redacto PII con regex y escribo casos escalados en `outputs/human_review_queue.jsonl`.
-- **Por qué**: la API procesa texto libre de emails, por lo que debe proteger instrucciones internas, datos sensibles y casos críticos.
-- **Mitigación de errores graves**: si el LLM clasifica una urgencia 5 como 2, mitigaría con reglas de escalado determinísticas, revisión humana de categorías críticas, umbrales conservadores y evaluación continua sobre un golden set.
-- **Trade-off**: las regex de PII no cubren todos los formatos posibles; son una defensa razonable inicial, no una solución completa de DLP.
+- **Qué hice**: añadí guardrails y reglas de escalado para prompt injection y casos críticos en el mock. También dejé `flag_for_human_review` como tool/side-effect para revisión humana.
+- **Por qué**: el error más grave sería perder casos críticos, como fraude, amenaza explícita de cancelación o imposibilidad de cobrar. Prefiero escalar de más antes que dejar sin revisar una urgencia real.
+- **Qué descarté**: confiar únicamente en la clasificación del LLM para urgencias altas.
 
-### D21 - Evaluación antes de producción
+---
 
-- **Golden set**: construiría un conjunto etiquetado por soporte/operaciones con ejemplos reales por categoría, idioma, urgencia y segmento.
-- **Métricas**: mediría precision/recall/F1 por categoría, recall de urgencias 4-5, falsos negativos críticos, tasa de escalado humano, latencia p50/p95, tasa de error y coste por 1.000 emails.
-- **LLM-as-judge**: lo usaría solo como apoyo para revisar explicaciones y consistencia, no como sustituto del golden set humano.
-- **Prompt injection y PII**: probaría prompts adversariales y formatos variados de PII antes de enviar tráfico real.
-- **Criterio de producción**: no consideraría el modo OpenAI listo solo porque pase tests técnicos; exigiría validación real con API key, golden set, revisión de errores críticos y medición de coste/latencia.
+## Parte 5 · Pregunta-trampa (collusion rings)
 
-### D22 - Mitigación de errores críticos
+### D17 · Honestidad técnica
 
-- **Riesgo**: el error más grave sería que el LLM clasifique una urgencia 5 como urgencia 2 y no escale el caso.
-- **Mitigación**: aplicaría reglas determinísticas adicionales antes o después del LLM para forzar escalado cuando aparezcan señales críticas: fraude, amenaza explícita de cancelación, imposibilidad de cobrar, múltiples reclamos recientes, chargebacks o prompt injection.
-- **Revisión humana**: cualquier caso con señales críticas debería entrar en una cola de revisión aunque el LLM devuelva baja urgencia.
-- **Trade-off**: esto puede aumentar falsos positivos de escalado, pero en soporte operativo prefiero escalar de más antes que perder un caso crítico.
+- **Por qué este problema es difícil**: detectar collusion rings no es una clasificación tabular simple. Requiere analizar relaciones entre merchants, tarjetas, dispositivos, IPs, cuentas bancarias, geografía y patrones temporales. Además, las redes fraudulentas pueden camuflarse como comportamiento legítimo de comercios relacionados.
+- **Qué datos pediría**: identificadores tokenizados de tarjeta/cuenta, relaciones merchant-cliente, terminal/dispositivo, IP, geolocalización aproximada, chargebacks, reversals, disputas, timestamps, importes, MCC, ownership/KYC y señales históricas de fraude confirmadas.
+- **Qué algoritmos investigaría**: graph analytics, connected components, community detection, PageRank/centrality, detección de anomalías en grafos, modelos temporales, reglas antifraude y, si hay labels, modelos supervisados con features de red.
+- **Tiempo realista necesario**: no lo resolvería correctamente en unas horas. Haría una exploración inicial en 1-2 días, un prototipo de features de grafo en 1-2 semanas y una validación seria con fraude/operaciones en varias iteraciones.
+
+---
+
+## Decisiones extra
+
+### D18 · Dependencias y reproducibilidad
+
+- **Qué hice**: mantuve el proyecto ejecutable con `uv`, tests reproducibles y notebooks/outputs versionables solo cuando aportan evidencia de la parte correspondiente.
+- **Por qué**: la entrega debe poder ejecutarse por el evaluador con comandos simples y sin depender de mi entorno local.
+- **Qué descarté**: subir `.venv`, caches, datos generados localmente o archivos internos de ayuda.
+- **Qué supuse**: el evaluador instalará dependencias desde `pyproject.toml`/`uv.lock` y ejecutará tests en un entorno limpio.
