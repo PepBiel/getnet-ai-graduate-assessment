@@ -18,7 +18,14 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException
 
-from .agent import build_agent, detect_prompt_injection, redact_pii
+from .agent import (
+    DEFAULT_MODEL_NAME,
+    build_agent,
+    detect_prompt_injection,
+    flag_for_human_review,
+    is_mock_mode,
+    redact_pii,
+)
 from .schemas import (
     BatchClassifyRequest,
     BatchClassifyResponse,
@@ -58,9 +65,8 @@ AgentDep = Annotated[object, Depends(get_agent)]
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     """Liveness probe. Devuelve modelo activo y versión."""
-    # TODO: rellena 'model' con el modelo realmente configurado
-    return HealthResponse(status="ok", model="gpt-4o-mini-or-mock", version=app.version)
-
+    model_name = "mock" if is_mock_mode() else DEFAULT_MODEL_NAME
+    return HealthResponse(status="ok", model=model_name, version=app.version)
 
 @app.post("/classify", response_model=ClassifyResponse)
 def classify(req: ClassifyRequest, agent: AgentDep) -> ClassifyResponse:
@@ -69,6 +75,7 @@ def classify(req: ClassifyRequest, agent: AgentDep) -> ClassifyResponse:
 
     # 1. Guardrail prompt injection (defensa antes del LLM)
     if detect_prompt_injection(req.email_text):
+        flag_for_human_review(req.merchant_id, "prompt_injection_detected")
         return ClassifyResponse(
             merchant_id=req.merchant_id,
             category=Category.other,

@@ -1,6 +1,6 @@
-# Parte 4 · API de clasificación de reclamaciones — `src/parte4_api/`
+# Parte 4 · API de clasificación de reclamaciones
 
-> Este README es **tu** entregable: cuando termines, descríbelo desde la perspectiva del evaluador. Reemplaza las secciones que necesites con tu implementación real.
+Esta API clasifica emails de reclamaciones de merchants usando FastAPI y un agente Agno. Puede ejecutarse con OpenAI o en modo determinístico offline mediante `MOCK_LLM=1`.
 
 ## Arquitectura
 
@@ -57,7 +57,7 @@ Respuesta:
   "urgency": 4,
   "requires_human_escalation": true,
   "reasoning": "...",
-  "merchant_context_used": true,
+  "merchant_context_used": false,
   "latency_ms": 423
 }
 ```
@@ -81,9 +81,9 @@ MOCK_LLM=1 pytest -v tests/test_api.py
 
 Cobertura mínima: `test_health`, `test_classify_happy_path`, `test_classify_prompt_injection`, `test_classify_invalid_input`, `test_batch_concurrency`.
 
-## Decisiones técnicas
+## Decisiones técnicas documentadas
 
-Documenta en `DECISIONS.md`:
+Las decisiones principales están recogidas en `DECISIONS.md`, incluyendo:
 
 - Por qué Agno (vs LangChain/LlamaIndex).
 - Modelo elegido + estimación de coste mensual procesando 5.000 emails/día.
@@ -99,4 +99,22 @@ Documenta en `DECISIONS.md`:
 
 ## Limitaciones conocidas
 
-(Documenta aquí lo que no llegaste a cubrir y por qué.)
+- El modo mock no reemplaza una evaluación real de calidad del LLM.
+- Las reglas del mock solo existen para tests offline.
+- Antes de producción haría un golden set etiquetado, medición por categoría, revisión de falsos negativos de urgencia alta y calibración de criterios de escalado.
+
+## Alcance de validación
+
+Para esta entrega he validado la API en modo `MOCK_LLM=1`.
+
+Esto permite comprobar de forma reproducible:
+
+- contrato de entrada/salida con Pydantic;
+- endpoints `/health`, `/classify` y `/classify/batch`;
+- guardrail de prompt injection;
+- redacción básica de PII;
+- uso de contexto de merchant;
+- side-effect de escalado humano;
+- ejecución de tests sin depender de una API key externa.
+
+La integración real con Agno/OpenAI está implementada, pero no ha sido validada con una API key real en esta entrega. Antes de producción, probaría el flujo completo con un proveedor real, mediría calidad sobre un golden set etiquetado y revisaría latencia, coste, errores y rate limits.

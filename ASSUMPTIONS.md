@@ -134,3 +134,32 @@ Documento vivo de supuestos. Se ira ampliando conforme avance la solucion.
 - **Qué supuse**: no uso `last_complaint_date` directamente. Solo uso features derivadas después de filtrar reclamos con fecha menor o igual a `reference_date`.
 - **Cómo lo verificaría con stakeholder**: confirmaría cuándo se registra realmente un reclamo y si esa información está disponible en el momento de predicción.
 - **Impacto si mi supuesto es falso**: si la fecha de reclamo no es fiable o no está disponible operacionalmente, el modelo podría depender de una señal que no se puede usar en producción. Por eso interpreto esas features con cautela y haría un sanity check sin ellas.
+
+## A20 - Modo mock para evaluación local de Parte 4
+
+- **Qué dice el spec ambiguamente**: permite `MOCK_LLM=1`, pero no define cuánta lógica debe tener el mock.
+- **Qué supuse**: el mock debe ser determinístico y suficiente para validar contrato, guardrails, side-effects y tests, pero no pretende medir calidad real de clasificación.
+- - **Limitación de validación**: en esta entrega no validé llamadas reales a OpenAI. Asumo que el evaluador podrá ejecutar el flujo reproducible con `MOCK_LLM=1`. Antes de producción validaría también el modo real con API key, rate limits, timeouts, coste y calidad de clasificación.
+- **Cómo lo verificaría con stakeholder**: confirmaría si el evaluador probará solo mock o también OpenAI con una API key propia.
+- **Impacto si mi supuesto es falso**: si esperan evaluar calidad semántica en modo mock, las reglas pueden parecer demasiado simples. Para calidad real usaría el agente Agno con OpenAI y un golden set.
+
+## A21 - Merchant sin contexto en `merchants_context.json`
+
+- **Qué dice el spec ambiguamente**: no especifica qué hacer si un `merchant_id` no aparece en el JSON de contexto.
+- **Qué supuse**: la API debe responder igualmente y marcar `merchant_context_used=False`, sin fallar.
+- **Cómo lo verificaría con stakeholder**: preguntaría si la ausencia de contexto debe degradar la urgencia, escalarse o tratarse como caso normal.
+- **Impacto si mi supuesto es falso**: algunos merchants podrían recibir clasificación con menos información de la esperada.
+
+## A22 - PII redaction basada en regex
+
+- **Qué dice el spec ambiguamente**: pide redactar PII, pero no define todos los tipos de PII ni el nivel de cobertura.
+- **Qué supuse**: para esta prueba cubro emails, teléfonos y tarjetas con regex simples antes del LLM.
+- **Cómo lo verificaría con stakeholder**: validaría requisitos legales/compliance y formatos locales adicionales como CPF, CNPJ o IBAN.
+- **Impacto si mi supuesto es falso**: podrían escaparse formatos de PII no cubiertos; en producción usaría un detector DLP más robusto.
+
+## A23 - Coste real no medido
+
+- **Qué dice el spec ambiguamente**: pide estimar coste mensual para 5.000 emails/día, pero no proporciona longitud media de emails, tokens reales, modelo final validado ni precio congelado.
+- **Qué supuse**: en esta entrega documento el método de estimación, pero no doy una cifra cerrada como si fuera coste real medido.
+- **Cómo lo verificaría con stakeholder**: mediría tokens sobre una muestra representativa de emails reales y confirmaría el modelo/proveedor final.
+- **Impacto si mi supuesto es falso**: una estimación sin medición real podría infraestimar o sobreestimar el coste; por eso prefiero dejar explícita la limitación.

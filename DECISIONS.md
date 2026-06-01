@@ -158,3 +158,64 @@ Documento vivo de decisiones tecnicas. Cada seccion se ira ampliando conforme av
 - **Calibración**: el Brier score indica que las probabilidades no están bien calibradas. Esto puede deberse al uso de `class_weight` y `scale_pos_weight`, que ayudan al ranking pero pueden distorsionar probabilidades.
 - **Interpretabilidad**: varias features importantes están relacionadas con reclamos seguros. Las mantengo porque aplican filtro temporal, pero las interpreto con cautela por los problemas de calidad detectados en `last_complaint_date`.
 - **Trade-off**: prioricé un pipeline reproducible y anti-leakage frente a optimizar métricas. No ajusté hiperparámetros agresivamente para evitar sobreoptimizar este único dataset.
+
+
+## Parte 4 - FastAPI + Agno Agent
+
+### D16 - Arquitectura de la API
+
+- **Qué hice**: implementé una API FastAPI con tres endpoints: `/health`, `/classify` y `/classify/batch`.
+- **Por qué**: el enunciado pide una API funcional que pueda arrancar con `uvicorn` y devolver JSON real.
+- **Diseño**: separé `main.py` para endpoints/dependency injection, `agent.py` para agente/tools/guardrails y `schemas.py` para contratos Pydantic.
+- **Trade-off**: mantengo la lógica del endpoint sencilla y delego clasificación en un wrapper de agente con una interfaz común `.classify(...)`.
+
+### D17 - Agno, OpenAI y modo mock
+
+- **Qué hice**: implementé un agente Agno con OpenAIChat y un `_MockAgent` determinístico activado con `MOCK_LLM=1`.
+- **Por qué Agno**: elegí Agno porque el enunciado lo menciona explícitamente y porque permite construir un agente ligero con tools custom, instrucciones claras y salida estructurada. Para este alcance, Agno es suficiente y evita introducir una arquitectura más grande.
+- **Por qué no LangChain/LlamaIndex**: LangChain o LlamaIndex serían útiles en sistemas con cadenas complejas, RAG amplio, múltiples retrievers o workflows más elaborados. En esta prueba solo necesito clasificar emails, usar dos tools locales y devolver un schema Pydantic, por lo que preferí una solución más pequeña y directa.
+- **Modelo elegido**: dejé configurado `gpt-4o-mini` como modelo por defecto por ser un modelo de bajo coste y adecuado para clasificación estructurada de emails cortos.
+- **Validación realizada**: validé la Parte 4 en modo `MOCK_LLM=1`, no con una API key real de OpenAI. Por tanto, no afirmo haber medido calidad real, latencia real, coste real ni compatibilidad real del structured output con OpenAI.
+- **Limitación honesta**: la integración real con Agno/OpenAI queda implementada, pero debería probarse con una API key real antes de considerarla lista para producción.
+- **Trade-off**: el mock permite validar contrato, endpoints, guardrails, redacción de PII, batch y side-effects de forma reproducible y sin coste externo, pero no mide calidad semántica real del LLM.
+
+### D18 - Coste y medición pendiente
+
+- **Qué pide el enunciado**: estimar el coste mensual procesando 5.000 emails/día.
+- **Qué puedo afirmar**: no ejecuté tráfico real contra OpenAI, por lo que no tengo una medición real de tokens por email ni de coste.
+- **Cómo lo estimaría correctamente**: antes de producción mediría tokens de entrada/salida en una muestra representativa de emails reales, multiplicaría por 5.000 emails/día y por 30 días, y aplicaría el precio vigente del modelo elegido.
+- **Fórmula**:
+  - `emails_mes = 5.000 × 30`
+  - `tokens_entrada_mes = emails_mes × tokens_entrada_promedio`
+  - `tokens_salida_mes = emails_mes × tokens_salida_promedio`
+  - `coste_mes = tokens_entrada_mes × precio_input + tokens_salida_mes × precio_output`
+- **Decisión**: no incluyo una cifra cerrada porque no he medido tokens reales ni he validado llamadas reales con API key. Prefiero documentar el método de estimación antes que inventar un coste aparentemente preciso.
+
+### D19 - Schema Pydantic y structured output
+
+- **Qué hice**: usé schemas Pydantic v2 para request/response y un enum cerrado de categorías.
+- **Por qué**: el contrato estricto reduce respuestas ambiguas del LLM y hace que los consumidores de la API reciban JSON validado.
+- **Trade-off**: un enum cerrado puede forzar algunos casos ambiguos a `other`, pero facilita métricas, dashboards y routing operativo.
+- **Reasoning**: limité `reasoning` a 300 caracteres para evitar respuestas largas, exposición innecesaria de datos y costes de downstream.
+
+### D20 - Guardrails, PII y escalado humano
+
+- **Qué hice**: detecto prompt injection antes del LLM, redacto PII con regex y escribo casos escalados en `outputs/human_review_queue.jsonl`.
+- **Por qué**: la API procesa texto libre de emails, por lo que debe proteger instrucciones internas, datos sensibles y casos críticos.
+- **Mitigación de errores graves**: si el LLM clasifica una urgencia 5 como 2, mitigaría con reglas de escalado determinísticas, revisión humana de categorías críticas, umbrales conservadores y evaluación continua sobre un golden set.
+- **Trade-off**: las regex de PII no cubren todos los formatos posibles; son una defensa razonable inicial, no una solución completa de DLP.
+
+### D21 - Evaluación antes de producción
+
+- **Golden set**: construiría un conjunto etiquetado por soporte/operaciones con ejemplos reales por categoría, idioma, urgencia y segmento.
+- **Métricas**: mediría precision/recall/F1 por categoría, recall de urgencias 4-5, falsos negativos críticos, tasa de escalado humano, latencia p50/p95, tasa de error y coste por 1.000 emails.
+- **LLM-as-judge**: lo usaría solo como apoyo para revisar explicaciones y consistencia, no como sustituto del golden set humano.
+- **Prompt injection y PII**: probaría prompts adversariales y formatos variados de PII antes de enviar tráfico real.
+- **Criterio de producción**: no consideraría el modo OpenAI listo solo porque pase tests técnicos; exigiría validación real con API key, golden set, revisión de errores críticos y medición de coste/latencia.
+
+### D22 - Mitigación de errores críticos
+
+- **Riesgo**: el error más grave sería que el LLM clasifique una urgencia 5 como urgencia 2 y no escale el caso.
+- **Mitigación**: aplicaría reglas determinísticas adicionales antes o después del LLM para forzar escalado cuando aparezcan señales críticas: fraude, amenaza explícita de cancelación, imposibilidad de cobrar, múltiples reclamos recientes, chargebacks o prompt injection.
+- **Revisión humana**: cualquier caso con señales críticas debería entrar en una cola de revisión aunque el LLM devuelva baja urgencia.
+- **Trade-off**: esto puede aumentar falsos positivos de escalado, pero en soporte operativo prefiero escalar de más antes que perder un caso crítico.
