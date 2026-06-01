@@ -1,0 +1,28 @@
+{
+  "xgboost": {
+    "model": "xgboost",
+    "roc_auc": 0.6010301970986943,
+    "average_precision": 0.11501558735162881,
+    "brier_score": 0.21217217406291874,
+    "positive_rate_test": 0.08733974358974358,
+    "recall_at_1pct": 0.013761467889908258,
+    "precision_at_1pct": 0.12,
+    "recall_at_5pct": 0.045871559633027525,
+    "precision_at_5pct": 0.08,
+    "recall_at_10pct": 0.12844036697247707,
+    "precision_at_10pct": 0.112
+  },
+  "xgboost_no_complaint_features": {
+    "model": "xgboost_no_complaint_features",
+    "roc_auc": 0.5275108537184557,
+    "average_precision": 0.0982704978188804,
+    "brier_score": 0.21940589130167895,
+    "positive_rate_test": 0.08733974358974358,
+    "recall_at_1pct": 0.022935779816513763,
+    "precision_at_1pct": 0.2,
+    "recall_at_5pct": 0.05504587155963303,
+    "precision_at_5pct": 0.096,
+    "recall_at_10pct": 0.10550458715596331,
+    "precision_at_10pct": 0.092
+  }
+}

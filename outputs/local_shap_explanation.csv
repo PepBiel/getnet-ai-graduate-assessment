@@ -1,0 +1,11 @@
+feature,shap_value,abs_shap_value
+num__recent_pct_pix_tpv,0.29710662,0.29710662
+cat__has_safe_complaint_False,0.20397659,0.20397659
+num__days_since_last_tx,0.17637354,0.17637354
+num__median_days_between_tx,0.1516653,0.1516653
+num__recent_tpv,0.113312066,0.113312066
+num__previous_bad_status_rate,0.103353076,0.103353076
+num__previous_pct_pix_tpv,0.080083415,0.080083415
+num__recent_n_tx,-0.075516626,0.075516626
+num__previous_pct_ecom_tpv,0.0700558,0.0700558
+num__previous_tpv,0.05459091,0.05459091

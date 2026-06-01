@@ -1,0 +1,37 @@
+{
+  "baseline": {
+    "model": "baseline_constant_positive_rate",
+    "roc_auc": 0.5,
+    "average_precision": 0.08733974358974358,
+    "brier_score": 0.07971151277942143,
+    "positive_rate_test": 0.08733974358974358
+  },
+  "models": [
+    {
+      "model": "logistic_regression",
+      "roc_auc": 0.6174275680421423,
+      "average_precision": 0.11366648138268334,
+      "brier_score": 0.23397661377299564,
+      "positive_rate_test": 0.08733974358974358,
+      "recall_at_1pct": 0.013761467889908258,
+      "precision_at_1pct": 0.12,
+      "recall_at_5pct": 0.05963302752293578,
+      "precision_at_5pct": 0.104,
+      "recall_at_10pct": 0.12844036697247707,
+      "precision_at_10pct": 0.112
+    },
+    {
+      "model": "xgboost",
+      "roc_auc": 0.6010301970986943,
+      "average_precision": 0.11501558735162881,
+      "brier_score": 0.21217217406291874,
+      "positive_rate_test": 0.08733974358974358,
+      "recall_at_1pct": 0.013761467889908258,
+      "precision_at_1pct": 0.12,
+      "recall_at_5pct": 0.045871559633027525,
+      "precision_at_5pct": 0.08,
+      "recall_at_10pct": 0.12844036697247707,
+      "precision_at_10pct": 0.112
+    }
+  ]
+}

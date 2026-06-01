@@ -106,3 +106,31 @@ Documento vivo de supuestos. Se ira ampliando conforme avance la solucion.
 - **Qué supuse**: usé intervalos semiabiertos, por ejemplo `[2025-07-01, 2025-10-01)` para Q3 2025, y truncado mensual de `transaction_date` para la comparación 2025 vs 2024.
 - **Cómo lo verificaría con stakeholder**: confirmaría la convención temporal usada en reporting oficial y si los timestamps se almacenan con zona horaria.
 - **Impacto si mi supuesto es falso**: algunas transacciones cercanas a límites de mes o trimestre podrían asignarse a un periodo distinto.
+
+## A16 - Modelado a nivel merchant
+
+- **Qué dice el spec ambiguamente**: el CSV está a nivel transacción, pero `fla_churn90` representa churn del merchant.
+- **Qué supuse**: el modelo debe entrenarse a nivel merchant, agregando transacciones en features de comportamiento.
+- **Cómo lo verificaría con stakeholder**: confirmaría si la unidad de decisión de negocio es merchant, merchant-snapshot o transacción.
+- **Impacto si mi supuesto es falso**: entrenar a otro grano podría cambiar las métricas y la interpretación del modelo.
+
+## A17 - Split temporal limitado por un único snapshot
+
+- **Qué dice el spec ambiguamente**: pide un split temporal-aware, pero el dataset parece estar centrado en un snapshot principal.
+- **Qué supuse**: evito leakage temporal construyendo features solo hasta `reference_date` y uso split estratificado a nivel merchant para evaluación.
+- **Cómo lo verificaría con stakeholder**: pediría snapshots adicionales para hacer una validación out-of-time real.
+- **Impacto si mi supuesto es falso**: las métricas pueden ser optimistas frente a una validación temporal real en producción.
+
+## A18 - Interpretabilidad con SHAP
+
+- **Qué dice el spec ambiguamente**: pide interpretabilidad, pero no exige una técnica concreta.
+- **Qué supuse**: SHAP es suficiente para obtener top-5 features importantes y justificar el modelo.
+- **Cómo lo verificaría con stakeholder**: revisaría si el equipo prefiere explicaciones globales, locales o ambas.
+- **Impacto si mi supuesto es falso**: podrían requerirse explicaciones locales por merchant, por ejemplo con LIME o SHAP individual.
+
+## A19 - Uso conservador de features de reclamos en modelado
+
+- **Qué dice el spec ambiguamente**: `last_complaint_date` puede ser útil para predecir churn, pero en el análisis de calidad se detectó que puede contener información posterior al snapshot.
+- **Qué supuse**: no uso `last_complaint_date` directamente. Solo uso features derivadas después de filtrar reclamos con fecha menor o igual a `reference_date`.
+- **Cómo lo verificaría con stakeholder**: confirmaría cuándo se registra realmente un reclamo y si esa información está disponible en el momento de predicción.
+- **Impacto si mi supuesto es falso**: si la fecha de reclamo no es fiable o no está disponible operacionalmente, el modelo podría depender de una señal que no se puede usar en producción. Por eso interpreto esas features con cautela y haría un sanity check sin ellas.

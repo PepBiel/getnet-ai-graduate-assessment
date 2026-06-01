@@ -20,10 +20,11 @@ Documento vivo de decisiones tecnicas. Cada seccion se ira ampliando conforme av
 
 ### D3 - Trazabilidad y no sobrelimpieza
 
-- **Que hice**: conserve columnas `*_raw` para importes y fechas antes de parsearlas; no elimine `cancellation_reason`, `last_complaint_date`, outliers ni filas posteriores a `reference_date` dentro de `load_clean`.
-- **Por que**: `load_clean` debe producir un dataset limpio y auditable para analisis general. Los filtros predictivos deben aplicarse despues, donde el objetivo temporal sea explicito.
-- **Que descarte**: filtrar globalmente todo lo posterior a `reference_date`, imputar importes nulos o eliminar variables sospechosas durante la carga.
-- **Que supuse**: algunas transacciones posteriores a `reference_date` pueden servir para EDA, validaciones o controles de calidad, aunque no deben usarse para features predictivas.
+- **Qué hice**: conservé columnas `*_raw` para los campos que iban a ser transformados (`amount`, `transaction_date`, `reference_date`, `last_complaint_date`, `dat_process`). Después parseé las versiones limpias, pero mantuve las originales para trazabilidad, auditoría y posibles análisis posteriores.
+- **Por qué**: `load_clean` debe producir un dataset limpio y auditable para análisis general. Mantener las columnas originales permite revisar errores de parseo, validar supuestos de formato y reutilizar la información raw si en partes posteriores se necesita otro tratamiento.
+- **Qué descarté**: sobrescribir sin trazabilidad los valores originales, filtrar globalmente todo lo posterior a `reference_date`, imputar importes nulos o eliminar variables sospechosas durante la carga.
+- **Qué supuse**: algunas transacciones posteriores a `reference_date` pueden servir para EDA, validaciones o controles de calidad, aunque no deben usarse para features predictivas.
+- **Trade-off**: conservar columnas `*_raw` aumenta ligeramente el tamaño del DataFrame, pero mejora la auditabilidad y evita perder información útil para debugging, `quality_report` o ejercicios posteriores.
 
 ### D4 - Deduplicacion por negocio
 
@@ -109,3 +110,51 @@ Documento vivo de decisiones tecnicas. Cada seccion se ira ampliando conforme av
 - **Q3**: si no existe TPV para el mismo mes de 2024, devuelvo `0` con `COALESCE`, interpretándolo como ausencia de volumen observado ese mes.
 - **Q4**: expliqué `dat_process` como una columna útil para partition pruning, pero manteniendo `transaction_date` como fecha de negocio.
 - **Trade-off**: no añadí lógica extra de deduplicación o normalización avanzada en las queries porque el enunciado presenta un esquema lógico de warehouse. Si los datos reales tuvieran duplicados o valores no normalizados, añadiría CTEs previas de validación/limpieza.
+
+
+## Parte 3 - Modelado ML
+
+### D10 - Grano del dataset de modelado
+
+- **Qué hice**: construí un dataset de modelado a nivel merchant, agregando transacciones en features de comportamiento antes de entrenar.
+- **Por qué**: `fla_churn90` es una etiqueta de churn a nivel merchant/snapshot, no a nivel transacción individual. Entrenar a nivel transacción haría que merchants con más transacciones pesaran más y podría distorsionar la evaluación.
+- **Qué descarté**: no entrené directamente sobre filas transaccionales.
+- **Qué supuse**: cada merchant tiene una única etiqueta válida para el snapshot de análisis.
+
+### D11 - Features descartadas por leakage o baja generalización
+
+- **Qué hice**: descarté `cancellation_reason`, `last_complaint_date` directa, `merchant_id`, `transaction_id`, `fla_churn90`, `reference_date`, `dat_process` y columnas `*_raw`.
+- **Por qué**: `cancellation_reason` parece información post-evento; `last_complaint_date` puede contener información posterior al snapshot; los IDs pueden inducir memorización; `dat_process` es operativo; las columnas raw son de trazabilidad.
+- **Qué usé en su lugar**: agregados seguros hasta `reference_date`, como TPV reciente, caída de TPV, approval rate, fricción operativa, canal, cadencia de transacción y reclamos seguros.
+- **Riesgo si me equivoco**: podría estar descartando una señal útil si estuviera disponible antes del snapshot, pero prefiero evitar leakage no justificado.
+
+### D12 - Análisis de correlación entre features
+
+- **Qué hice**: después de construir features seguras a nivel merchant, revisé la correlación Spearman entre variables numéricas para detectar redundancias fuertes.
+- **Por qué**: algunas métricas de volumen, actividad y ratios pueden estar relacionadas. Revisar correlaciones ayuda a evitar features duplicadas y a interpretar mejor los modelos, especialmente el baseline lineal.
+- **Qué no hice**: no usé correlación para decidir si una variable con posible leakage debía conservarse. Las columnas sospechosas se descartan por disponibilidad temporal y lógica de negocio, no por su correlación.
+- **Decisión**: no eliminé automáticamente todas las variables correlacionadas. Mantuve features interpretables cuando representaban señales de negocio distintas.
+- **Trade-off**: mantener features correlacionadas puede repartir importancia entre variables similares, especialmente en modelos de árboles.
+
+### D13 - Split y evaluación del modelo
+
+- **Qué hice**: construí features usando solo información con fecha menor o igual a `reference_date` y después hice un split estratificado a nivel merchant.
+- **Por qué**: el target está desbalanceado y el dataset parece tener un snapshot principal, por lo que mantuve la proporción de churn en train/test sin mezclar información futura en las features.
+- **Limitación**: si solo hay un snapshot, este split no es una validación temporal out-of-time real. Para producción, validaría en snapshots posteriores.
+- **Métricas**: usé ROC-AUC, PR-AUC / Average Precision, Brier score y precision/recall@k, evitando accuracy como métrica principal.
+
+### D14 - Modelos e interpretabilidad
+
+- **Qué hice**: entrené una Logistic Regression como baseline interpretable y un XGBoost como modelo no lineal más potente.
+- **Por qué**: la regresión logística sirve como referencia simple y XGBoost puede capturar interacciones no lineales en datos tabulares.
+- **Interpretabilidad**: usé SHAP para explicar el modelo final y obtener el top-5 de features por importancia media absoluta.
+- **Qué descarté**: no añadí LIME para evitar introducir una dependencia adicional. SHAP ya está disponible en el entorno y cubre el requisito de interpretabilidad global.
+- **Matiz**: la importancia de features indica asociación con la predicción, no causalidad.
+
+### D15 - Lectura de resultados y limitaciones del modelo
+
+- **Qué observé**: los modelos muestran señal moderada, no una separación fuerte. El ROC-AUC está alrededor de 0.60–0.62 y la Average Precision mejora ligeramente la tasa base de churn.
+- **Por qué importa**: esto sugiere que las features construidas aportan algo de señal, pero el modelo no debe interpretarse como una solución predictiva robusta ni lista para producción.
+- **Calibración**: el Brier score indica que las probabilidades no están bien calibradas. Esto puede deberse al uso de `class_weight` y `scale_pos_weight`, que ayudan al ranking pero pueden distorsionar probabilidades.
+- **Interpretabilidad**: varias features importantes están relacionadas con reclamos seguros. Las mantengo porque aplican filtro temporal, pero las interpreto con cautela por los problemas de calidad detectados en `last_complaint_date`.
+- **Trade-off**: prioricé un pipeline reproducible y anti-leakage frente a optimizar métricas. No ajusté hiperparámetros agresivamente para evitar sobreoptimizar este único dataset.
